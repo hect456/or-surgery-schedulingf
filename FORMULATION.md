@@ -1,6 +1,6 @@
 # Elective Surgery Scheduling — MILP Formulation
 
-**Author:** Operations Research Scientist  
+**Author:** Operations Research Scientist  Hector Bonilla
 **Context:** Real-world OR scheduling problem at a Portuguese NHS hospital (SNS).  
 **Reference:** Marques & Captivo (2015), *Centro Hospitalar Lisboa Norte (CHLN)*; Cardoen et al. (2010) benchmark.
 
