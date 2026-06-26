@@ -1,10 +1,8 @@
-# Elective Surgery Scheduling — Problem Formulation
+# Elective Surgery Scheduling — MILP Formulation
 
-This is a single, primary formulation: an **interval-based Constraint Programming**
-model, solved with Google OR-Tools CP-SAT. A Mixed-Integer Programming formulation was
-also prototyped, purely as a comparison point to justify the choice below — it is kept
-short, in §12, rather than written up as a second co-equal model. Demo results and
-the comparison numbers are in [RESULTS.md](RESULTS.md).
+**Author:** Operations Research Scientist  
+**Context:** Real-world OR scheduling problem at a Portuguese NHS hospital (SNS).  
+**Reference:** Marques & Captivo (2015), *Centro Hospitalar Lisboa Norte (CHLN)*; Cardoen et al. (2010) benchmark.
 
 ---
 
