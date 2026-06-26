@@ -2,14 +2,17 @@
 tests/test_model.py — Unit tests for the surgery scheduling models.
 
 Covers:
-1. Baseline MILP (OR-Tools/CBC) constraint correctness on the demo instance.
-2. Greedy heuristic feasibility.
-3. CP-SAT interval-based production model — same hard constraints, plus the
-   exact no-overlap / cumulative checks the baseline can't express.
+1. Primary CP-SAT interval-based model — hard constraints C1-C11, including
+   the exact no-overlap / cumulative checks the alternative MILP can't
+   express (FORMULATION.md §9).
+2. Alternative MILP (OR-Tools/CBC, FORMULATION.md §12) constraint
+   correctness on the demo instance — the comparison point, not a parallel
+   acceptance target.
+3. Greedy heuristic feasibility (used for warm-starting both solvers).
 4. Cross-validation: MILP and CP-SAT agree the demo instance is solvable
    and both respect every shared hard constraint (the acceptance contract
-   referenced in FORMULATION.md / PRODUCTION_FORMULATION.md).
-5. The medium instance stays feasible at scale.
+   referenced in FORMULATION.md).
+5. The medium and literature-calibrated instances stay feasible at scale.
 """
 
 import sys, os
@@ -17,7 +20,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.data.instances import demo_instance, medium_instance
+from src.data.instances import demo_instance, medium_instance, literature_chln_instance
 from src.solvers.milp_baseline_solver import MILPBaselineSolver
 from src.solvers.cp_sat_interval_solver import CPSATIntervalSolver
 from src.solvers.greedy_solver import GreedySolver
@@ -145,6 +148,17 @@ def test_medium_instance_feasible():
     _assert_hard_constraints(inst, result)
 
 
+def test_literature_chln_instance_feasible():
+    """The instance calibrated to published real CHLN waiting-list statistics
+    (Marques & Captivo, 2015) must stay solvable despite the priority-4
+    deconfliction repair pass (_resolve_priority4_conflicts)."""
+    inst   = literature_chln_instance(seed=7, n_cases=80)
+    solver = MILPBaselineSolver(backend="CBC", time_limit_sec=60, mip_gap=0.05)
+    result = solver.solve(inst)
+    assert result.is_optimal(), f"Literature CHLN instance: {result.status}"
+    _assert_hard_constraints(inst, result)
+
+
 if __name__ == "__main__":
     tests = [
         test_demo_milp_solves_to_optimal,
@@ -152,6 +166,7 @@ if __name__ == "__main__":
         test_milp_and_cp_sat_agree_demo_is_fully_schedulable,
         test_greedy_feasible,
         test_medium_instance_feasible,
+        test_literature_chln_instance_feasible,
     ]
     passed = 0
     failed = 0

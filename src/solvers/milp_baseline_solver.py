@@ -24,15 +24,20 @@ rather than through an intermediary, which is what `_solve_gurobi` below
 does. The formulation is identical either way; only the rendering layer
 differs.
 
-This is the BASELINE formulation. It mirrors FORMULATION.md exactly:
+This is the ALTERNATIVE formulation discussed in FORMULATION.md §12 — kept as
+a comparison point that justifies choosing CP-SAT (cp_sat_interval_solver.py)
+as the primary model, not as a second co-equal deliverable:
   - Decision variables : x_{cdr} in {0,1}  and  z_c >= 0
   - Objective           : three-term weighted tardiness + non-scheduling penalty
-  - Constraints         : C1-C10 as labelled in FORMULATION.md
+  - Constraints         : C1-C6 and C9 unchanged from FORMULATION.md; C7 (room)
+                           and C10 (equipment) are linear capacity SUMS here,
+                           not NoOverlap/Cumulative — the day-bucket
+                           approximation FORMULATION.md §3 argues against;
+                           no C11 (a day-bucket model cannot express a
+                           multi-day bed stay correctly).
 
-It reasons at day+room granularity (no intraday clock times) — see
-PRODUCTION_FORMULATION.md for the interval-based CP-SAT model that adds
-exact start times, sequencing and exact (rather than day-aggregate) shared
-resource contention.
+It reasons at day+room granularity (no intraday clock times). RESULTS.md
+reports a head-to-head run against the CP-SAT model on the same data.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from typing import Dict, Tuple
 from ..model.types import PlanningInstance, Assignment, SolverResult, Priority
 from ..model.penalty import compute_all_penalties
 from .base_solver import BaseSolver
+from .warm_start import greedy_warm_start
 
 
 def _feasible_triples(instance: PlanningInstance):
@@ -81,10 +87,12 @@ class MILPBaselineSolver(BaseSolver):
                   (forced to {0,1} by constraint C3)
     """
 
-    def __init__(self, backend: str = "CBC", time_limit_sec: int = 120, mip_gap: float = 0.01):
+    def __init__(self, backend: str = "CBC", time_limit_sec: int = 120, mip_gap: float = 0.01,
+                 warm_start: bool = True):
         super().__init__(time_limit_sec, mip_gap)
         self.backend = backend.upper()
         self.name = f"OR-Tools/{self.backend}" if self.backend != "GUROBI" else "Gurobi"
+        self.warm_start = warm_start   # seed the search with the greedy heuristic's assignment
 
     def _build_and_solve(self, instance: PlanningInstance) -> SolverResult:
         if self.backend == "GUROBI":
@@ -140,6 +148,9 @@ class MILPBaselineSolver(BaseSolver):
 
         self._add_constraints_ortools(solver, instance, feasible, x, z)
 
+        if self.warm_start:
+            self._apply_warm_start_ortools(solver, instance, x, z)
+
         status_code = solver.Solve()
         status_map = {
             pywraplp.Solver.OPTIMAL: "Optimal", pywraplp.Solver.FEASIBLE: "Feasible",
@@ -152,10 +163,14 @@ class MILPBaselineSolver(BaseSolver):
         obj_val, gap = None, None
         if status in ("Optimal", "Feasible"):
             obj_val = solver.Objective().Value()
-            if status == "Feasible":   # not proven optimal — report the remaining gap
-                bound = solver.Objective().BestBound()
-                if obj_val:
-                    gap = abs(obj_val - bound) / max(abs(obj_val), 1e-9)
+            # Compute the gap regardless of status label: CBC/SCIP here don't
+            # honor an early relative-gap stop (see note above, so "Optimal"
+            # should mean a literal 0% gap) — but report the real number
+            # rather than assuming it, consistent with how Gurobi/CP-SAT are
+            # reported (their "Optimal" can be a tolerance, not a literal 0).
+            bound = solver.Objective().BestBound()
+            if obj_val:
+                gap = abs(obj_val - bound) / max(abs(obj_val), 1e-9)
             for (cid, d, rid), var in x.items():
                 if var.solution_value() > 0.5:
                     assignments.append(Assignment(case_id=cid, day=d, room_id=rid))
@@ -166,6 +181,17 @@ class MILPBaselineSolver(BaseSolver):
         return SolverResult(status=status, objective_value=obj_val, assignments=assignments,
                              unscheduled_case_ids=unscheduled, solve_time_sec=0.0,
                              solver_name=self.name, gap=gap)
+
+    def _apply_warm_start_ortools(self, solver, instance, x, z):
+        assigned, unsched = greedy_warm_start(instance)
+        hint_vars, hint_vals = [], []
+        for (cid, d, rid), var in x.items():
+            hint_vars.append(var)
+            hint_vals.append(1.0 if assigned.get(cid) == (d, rid) else 0.0)
+        for cid, var in z.items():
+            hint_vars.append(var)
+            hint_vals.append(1.0 if cid in unsched else 0.0)
+        solver.SetHint(hint_vars, hint_vals)
 
     def _add_constraints_ortools(self, solver, instance, feasible, x, z):
         cases, days = instance.cases, instance.days
@@ -243,6 +269,13 @@ class MILPBaselineSolver(BaseSolver):
             x = {k: m.addVar(vtype=GRB.BINARY, name=f"x_{k[0]}_{k[1]}_{k[2]}") for k in feasible}
             z = {c.id: m.addVar(lb=0.0, ub=1.0, name=f"z_{c.id}")
                  for c in cases if c.priority != Priority.EMERGENT_ADDON}
+
+            if self.warm_start:
+                assigned, unsched = greedy_warm_start(instance)
+                for (cid, d, rid), var in x.items():
+                    var.Start = 1.0 if assigned.get(cid) == (d, rid) else 0.0
+                for cid, var in z.items():
+                    var.Start = 1.0 if cid in unsched else 0.0
 
             m.setObjective(
                 gp.quicksum(_objective_coeff(instance, case_map[cid], d) * var

@@ -84,11 +84,11 @@ class Surgeon:
 
     k_{hd}^{day} is intentionally also bounded by room capacity in the
     instances we build (min of "surgeon limit" and "max single-room
-    capacity that day") — one linear constraint then does double duty:
-    it both caps overwork AND prevents the same surgeon being scheduled
-    in two rooms at once at the daily-aggregate level. The interval-based
-    production model (see PRODUCTION_FORMULATION.md) replaces this
-    approximation with an exact NoOverlap over the surgeon's intervals.
+    capacity that day"). The primary CP-SAT model (FORMULATION.md C8)
+    additionally adds an exact NoOverlap over the surgeon's intervals, so
+    a surgeon literally cannot be scheduled in two rooms at once, not just
+    within a daily-minutes budget; the alternative MILP formulation
+    (FORMULATION.md §12) only has the daily-minutes sum.
     """
     id: str
     name: str

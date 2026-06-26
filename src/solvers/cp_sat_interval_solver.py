@@ -1,46 +1,28 @@
 """
 cp_sat_interval_solver.py — Interval-Based Constraint Programming model,
-solved with Google OR-Tools CP-SAT. This is the PRODUCTION formulation.
+solved with Google OR-Tools CP-SAT. This is the PRIMARY formulation —
+see FORMULATION.md, sections 3 (why CP, not MILP), 7-9 (variables,
+objective, constraints C1-C11). Every constraint below carries the same
+C-number as FORMULATION.md §9, so the two can be read side by side.
 
-Why interval-based CP-SAT for production?
--------------------------------------------
-The baseline MILP (milp_baseline_solver.py) reasons at day+room granularity:
-it sums durations against a daily capacity bucket. That's an aggregate
-relaxation — it cannot express "these two cases don't overlap in time" or
-"this shared device is in use at this exact moment", only "their durations
-fit in the day". CP-SAT's interval variables (start, size, end, optional
-presence) plus AddNoOverlap / AddCumulative are the textbook tool for this
-class of problem (job-shop / RCPSP-family disjunctive scheduling): they
-give exact, branch-and-bound-free disjunctive reasoning with no big-M
-constants, and CP-SAT's lazy-clause-generation search is the best-known
-open-source approach for these problem shapes (Perron & Furnon, "CP-SAT: a
-constraint programming solver", OR-Tools documentation; it is also the
-backbone of many published RCPSP/scheduling benchmarks). That is the
-concrete "how would this scale to production" answer this file gives.
-
-How this maps onto the baseline (FORMULATION.md), element by element —
-see PRODUCTION_FORMULATION.md for the full table:
-
-  Baseline (MILP)                         Production (this file)
-  --------------------------------------  -----------------------------------
-  x_{cdr} in {0,1}                        presence_{cdr} in {0,1} + start_{cdr}
-  (implicit, none)                        interval_{cdr} = [start, start+t_tot)
-  C7 room capacity: sum t_tot*x <= k_dr   AddNoOverlap over intervals in (d,r)
-  C8 surgeon daily sum <= limit           AddNoOverlap over intervals for (h,d)
-                                           PLUS the same linear daily-sum bound
-  C9 surgeon weekly sum <= limit          same linear weekly-sum bound (kept)
-  C10 equipment day-count <= units        AddCumulative over real start/end,
-                                           capacity = units (exact concurrency)
-  (excluded in baseline)                  AddCumulative over downstream
-                                           recovery/ICU beds (day-granularity)
-  Objective (3-term tardiness+penalty)    identical, evaluated on presence_{cdr}
-
-Everything else (priority EMERGENT_ADDON lock-in, schedule-or-penalise,
-room-service eligibility, pediatric block, one-case-per-patient) is the
-same constraint, just expressed over `presence` instead of `x`.
+Why interval-based CP-SAT (FORMULATION.md §3, condensed)?
+-----------------------------------------------------------
+A linear capacity-sum constraint ("total minutes used this day <= k") only
+certifies that a set of durations *fits*; it does not certify they can be
+placed *without colliding*, and the two are not equivalent once a resource
+is shared across rooms (a surgeon working two rooms, a shared imaging
+unit). CP-SAT's interval variables (start, size, end, optional presence)
+plus AddNoOverlap / AddCumulative are the textbook tool for this class of
+problem (job-shop / RCPSP-family disjunctive scheduling): exact,
+branch-and-bound-free disjunctive reasoning via specialised global-constraint
+propagation (Vilim 2004 for NoOverlap; Schutt et al. 2009 for Cumulative),
+not a bigger/slower MILP. See FORMULATION.md §3 for the full argument and
+§12 for the alternative MILP formulation (milp_baseline_solver.py) kept
+purely as the empirical comparison point that justifies this choice.
 """
 
 from __future__ import annotations
+import os
 from collections import defaultdict
 from typing import Dict, Tuple
 
@@ -49,6 +31,7 @@ from ortools.sat.python import cp_model
 from ..model.types import PlanningInstance, Assignment, SolverResult, Priority
 from ..model.penalty import compute_all_penalties
 from .base_solver import BaseSolver
+from .warm_start import greedy_warm_start
 
 
 class CPSATIntervalSolver(BaseSolver):
@@ -70,6 +53,12 @@ class CPSATIntervalSolver(BaseSolver):
 
     name = "CP-SAT/Interval"
 
+    def __init__(self, time_limit_sec: int = 120, mip_gap: float = 0.01,
+                 warm_start: bool = True, log_search_progress: bool = False):
+        super().__init__(time_limit_sec, mip_gap)
+        self.warm_start = warm_start                 # seed search with the greedy assignment
+        self.log_search_progress = log_search_progress
+
     def _build_and_solve(self, instance: PlanningInstance) -> SolverResult:
         model = cp_model.CpModel()
 
@@ -88,11 +77,11 @@ class CPSATIntervalSolver(BaseSolver):
             for d in instance.valid_days(c):
                 for r in rooms:
                     if not instance.room_service_match(r, c, d):
-                        continue
+                        continue  # C4: room-service roster
                     if r.ambulatory_only and c.scope.value != 2:
-                        continue
+                        continue  # C5: ambulatory-only rooms
                     if instance.violates_pediatric_block(c, d):
-                        continue
+                        continue  # C6: pediatric-block rule
                     if not surg_map[c.surgeon_id].availability.get(d, True):
                         continue
                     candidates.append((c.id, d, r.id))
@@ -116,6 +105,7 @@ class CPSATIntervalSolver(BaseSolver):
             )
 
         # ── is_scheduled / unscheduled bookkeeping ───────────────────────
+        # C2 (priority-4 locked to day 1) and C3 (schedule-or-penalise).
         is_scheduled: Dict[str, object] = {}
         unscheduled: Dict[str, object] = {}
         for c in cases:
@@ -125,7 +115,7 @@ class CPSATIntervalSolver(BaseSolver):
                 d1_slots = [presence[(c.id, d, rid)] for (cid, d, rid) in candidates
                             if cid == c.id and d == d1]
                 if d1_slots:
-                    model.Add(sum(d1_slots) == 1)
+                    model.Add(sum(d1_slots) == 1)  # C2
                 # also forbid any non-day-1 slot for this case
                 other_slots = [presence[k] for k in candidates
                                if k[0] == c.id and k[1] != d1]
@@ -200,11 +190,11 @@ class CPSATIntervalSolver(BaseSolver):
                     if ivs:
                         model.AddCumulative(ivs, [1] * len(ivs), cap)
 
-        # ── New in production: downstream recovery/ICU bed AddCumulative ──
+        # ── C11: downstream recovery/ICU bed AddCumulative ───────────────
         # Day-granularity resource: a case occupies a bed from its surgery
-        # day for `recovery_los_days` days. Excluded from the baseline (see
-        # FORMULATION.md "what we exclude and why"); this is the concrete
-        # extension path for it once the model is interval-based.
+        # day for `recovery_los_days` days. Not expressible in the
+        # alternative day-bucket MILP (FORMULATION.md §12) — needs an
+        # interval representation to even state correctly.
         if instance.has_bed_limits():
             self._add_recovery_bed_constraints(model, instance, candidates, presence, is_scheduled)
 
@@ -225,11 +215,35 @@ class CPSATIntervalSolver(BaseSolver):
             objective_terms.append(int(round(c.priority.value * penalties[cid])) * u)
         model.Minimize(sum(objective_terms))
 
+        # ── Warm start: seed CP-SAT's portfolio search with the greedy
+        # heuristic's (day, room) assignment. Only the discrete `presence`
+        # and `unscheduled` decisions are hinted, not exact start times —
+        # see warm_start.py for why. This is standard production practice
+        # once an instance is large enough that "first incumbent" matters;
+        # CP-SAT treats AddHint as a bias, not a hard constraint, so an
+        # inconsistent or partial hint never risks correctness.
+        if self.warm_start:
+            assigned, unsched = greedy_warm_start(instance)
+            for key, var in presence.items():
+                cid, d, rid = key
+                model.AddHint(var, 1 if assigned.get(cid) == (d, rid) else 0)
+            for cid, u in unscheduled.items():
+                model.AddHint(u, 1 if cid in unsched else 0)
+
         # ── Solve ─────────────────────────────────────────────────────────
+        # num_search_workers: CP-SAT's parallel portfolio (LNS + multiple
+        # complete-search strategies) is the actual state-of-the-art engine
+        # here — we deliberately do NOT hand-write a custom decision
+        # strategy on top of it; OR-Tools' own guidance is that the default
+        # portfolio outperforms manual search hints absent deep structural
+        # knowledge the model doesn't have. Capped at the machine's core
+        # count (here: 8) since oversubscribing workers past physical cores
+        # only adds contention, not search diversity.
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.time_limit_sec)
         solver.parameters.relative_gap_limit = self.mip_gap
-        solver.parameters.num_search_workers = 8
+        solver.parameters.num_search_workers = min(8, os.cpu_count() or 8)
+        solver.parameters.log_search_progress = self.log_search_progress
         status = solver.Solve(model)
 
         status_map = {
@@ -257,8 +271,15 @@ class CPSATIntervalSolver(BaseSolver):
                 if solver.Value(u) == 1:
                     unscheduled_ids.append(cid)
 
+        # Always compute the gap, even when status == OPTIMAL: with
+        # relative_gap_limit set (here: self.mip_gap), CP-SAT's OPTIMAL means
+        # "proven within that tolerance," exactly like Gurobi's default
+        # termination rule — NOT necessarily a literal zero gap. Reporting
+        # this honestly (rather than assuming OPTIMAL implies 0%) is the
+        # only way to catch cases like a warm start changing which
+        # within-tolerance incumbent gets accepted first.
         gap = None
-        if status == cp_model.FEASIBLE:   # OPTIMAL means gap is 0 by definition
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             try:
                 best = solver.BestObjectiveBound()
                 if obj_val is not None and obj_val != 0:
