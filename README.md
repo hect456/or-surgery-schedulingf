@@ -26,26 +26,86 @@ pip install ortools
 
 # Run the 20-case demo on the primary model
 python main.py --solver cp-sat
+```
 
-# Save a Gantt-style image of that schedule
-python main.py --solver cp-sat --plot demo.png
+That's the whole setup: one `pip install`, one command. Everything else below is the
+same `main.py` entry point with different flags.
 
-# Run the ~200-case scaling instance
-python main.py --instance medium --solver cp-sat
+---
 
-# Run the instance calibrated to published real CHLN waiting-list statistics
-python main.py --instance chln --solver cp-sat
+## How to Run Each Algorithm
 
-# Optional: compare against the alternative MILP formulation (needs nothing extra)
-python main.py --instance demo --benchmark --gap 0.0001
+`main.py` doesn't hide the solver choice behind a config file — `--solver` picks the
+algorithm directly, so it's explicit which one produced any given run:
 
+```bash
+python main.py [--instance demo|medium|chln] [--solver <name>] [--time-limit SECONDS]
+                [--gap FRACTION] [--plot PATH] [--benchmark]
+```
+
+| `--solver` value | Algorithm | What it is | When to use it |
+|---|---|---|---|
+| `cp-sat` (default) | Interval-based **Constraint Programming** | OR-Tools CP-SAT: `NewOptionalIntervalVar` + `NoOverlap`/`Cumulative` global constraints, solved by CP-SAT's parallel-portfolio search. **The primary, production model.** | Always, unless you specifically want the comparison point below. |
+| `milp-cbc` | **Mixed-Integer Program**, open-source backend | OR-Tools `linear_solver` (pywraplp) driving the bundled CBC solver — no separate install. Day-bucket formulation: presence binaries summed per room/day instead of exact time intervals. | To reproduce the MIP-vs-CP comparison in RESULTS.md, or if you have no CP-SAT/Gurobi available at all. |
+| `milp-gurobi` | Same MIP, commercial backend | Identical formulation to `milp-cbc`, routed through native `gurobipy` instead of CBC. Converges to a *proven* optimum far faster (seconds vs. tens of minutes at the 200-case scale). | When you need the MIP's true optimum as a benchmark reference, not just a 30-minute feasible bound (see RESULTS.md Step 1). |
+| `milp-scip` | Same MIP, SCIP backend | Another OR-Tools-bundled backend for the same MIP formulation, no extra install. | A free alternative to CBC if you want to cross-check solver-specific behavior. |
+| `hexaly` | Local-search metaheuristic | Real (non-stub) integration against Hexaly's API, written as a set-partition formulation. **Falls back to `milp-cbc` automatically** if `hexaly` isn't installed/licensed, printing setup instructions. | Optional extension point for very large instances or same-day re-optimization (FORMULATION.md §14) — not required to see the core model run. |
+| `greedy` | Constructive heuristic | Sorts cases by priority/deadline and packs them in greedily, no solver involved. | Sanity-check lower bound, or a warm-start signal for the other solvers — never the final answer. |
+
+Two backend families, one objective: every solver above optimizes the *same* shared
+`w_c` penalty (`src/model/penalty.py`) over the *same* `PlanningInstance` — only how
+each one expresses "don't double-book a resource" differs (exact time intervals for
+CP-SAT, aggregate day-level sums for the MIP family). That's the whole comparison
+RESULTS.md is built on.
+
+### Choosing an instance
+
+| `--instance` value | Size | Purpose |
+|---|---|---|
+| `demo` (default) | 20 cases, 5 rooms, 6 surgeons | Small enough to read the printed schedule by eye; exercises every constraint family in one run. |
+| `medium` | ~200 cases, 12 rooms, 17 surgeons | The scaling instance — this is where the CP-vs-MIP gap actually shows up (see Results below). |
+| `chln` | ~300 cases, 6 rooms, 10 surgeons | A separate generator whose waiting-time distribution is calibrated to reproduce the *published, audited* CHLN waiting-list statistics (Marques & Captivo, 2015) — see "Testing Against Real Data" below. |
+
+### Useful flags
+
+- `--time-limit SECONDS` (default 120) — wall-clock budget given to the solver. CP-SAT
+  and the MIP backends both report whatever they have when time runs out, plus the gap
+  to their own best-known bound (never assume "Optimal" means a literally zero gap —
+  it means "within the configured gap," always printed).
+- `--gap FRACTION` (default 0.01 = 1%) — the relative-gap target the solver stops at
+  once reached, e.g. `--gap 0.0001` for a near-exact close on a small instance.
+- `--plot PATH` — saves a Gantt-style PNG of the resulting schedule (`src/utils/visualizer.py`):
+  `python main.py --solver cp-sat --plot demo.png`.
+- `--benchmark` — ignores `--solver` and runs *every* available backend (Greedy,
+  CP-SAT, CBC, Gurobi if installed, Hexaly if licensed) back-to-back on the same
+  instance, then prints a comparison table. This is what produced every table in
+  RESULTS.md:
+  ```bash
+  python main.py --instance demo --benchmark --gap 0.0001
+  ```
+
+### Reading the output
+
+Every run prints, per solver: **Status** (Optimal/Feasible — see the gap caveat
+above), **Objective** (lower is better — it's a penalty total, not a count), **Gap**,
+how many cases got **Scheduled** out of the total, and wall-clock **Time**, followed by
+the actual weekly schedule (day → room → case, with clock times for CP-SAT or
+arbitrary same-day ordering for the MIP, which doesn't model exact time at all — see
+FORMULATION.md Appendix A). `src/utils/reporter.py` also re-checks every hard
+constraint (no double-booking, no surgeon/room/equipment overrun) on the printed
+schedule before showing it, so an inconsistent result would be caught, not just
+displayed.
+
+### Optional backends and tests
+
+```bash
 # Optional: commercial backend for the alternative MILP (requires a license)
 pip install gurobipy
 
 # Optional: third backend, license-gated, falls back to CBC if absent (see FORMULATION.md §12)
 pip install hexaly
 
-# Run the test suite
+# Run the test suite (acceptance contract: hard constraints + cross-solver consistency)
 python tests/test_model.py
 ```
 
