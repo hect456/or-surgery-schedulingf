@@ -192,11 +192,15 @@ $$
 \text{dayof}_c = d_{\text{idx}} \quad \text{(via } \texttt{OnlyEnforceIf}\text{, whenever } \text{pr}_{cdr}=1\text{)}
 $$
 $$
-\text{bed}_c = \texttt{NewOptionalIntervalVar}\big(\text{dayof}_c,\ \text{los}_c,\ \text{dayof}_c+\text{los}_c,\ \text{is\_scheduled}_c\big)
+\text{bed}_c = \texttt{NewOptionalIntervalVar}\big(\text{dayof}_c,\ \text{los}_c,\ \text{dayof}_c+\text{los}_c,\ 1-u_c\big)
 $$
 $$
 \texttt{AddCumulative}\big(\{\text{bed}_c : \rho(c)=\rho\},\ \text{demands}=1,\ \text{capacity}=\beta_\rho\big) \qquad \forall \rho
 $$
+
+The bed interval's presence literal is $1-u_c$ (§3's unscheduled indicator, with the
+convention $u_c\equiv 0$ for priority-4 cases, which C2 always schedules) — the bed only
+actually occupies capacity for a case that is actually scheduled somewhere.
 
 This is the constraint the case prompt names directly ("downstream constraints such as
 recovery/ICU or ward beds") and the clearest illustration of why an interval
