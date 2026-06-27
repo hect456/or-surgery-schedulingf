@@ -18,18 +18,53 @@ why it validates the CP-over-MIP choice.
 
 ---
 
-## Quick Start
+## Installation (from a fresh machine)
+
+**Prerequisite:** Python 3.10+ (OR-Tools' CP-SAT requires it). Check with:
 
 ```bash
-# Core dependency — bundles CBC (the comparison MILP) and CP-SAT (the primary model)
-pip install ortools
+python --version
+```
 
-# Run the 20-case demo on the primary model
+**1. Get the code** (clone, or just download/unzip if you already have it locally):
+
+```bash
+git clone <repo-url>
+cd or-surgery-scheduling
+```
+
+**2. (Recommended) Create an isolated virtual environment**, so this project's
+dependencies don't collide with anything else on the machine:
+
+```powershell
+# Windows (PowerShell)
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+```bash
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+**3. Install dependencies** — everything required is in `requirements.txt`
+(`ortools` for both solvers, `matplotlib` for the `--plot` Gantt images):
+
+```bash
+pip install -r requirements.txt
+```
+
+**4. Verify it works** — this should print a full weekly schedule with no errors:
+
+```bash
 python main.py --solver cp-sat
 ```
 
-That's the whole setup: one `pip install`, one command. Everything else below is the
-same `main.py` entry point with different flags.
+That's the entire required setup: one virtual environment, one `pip install`, one
+command. Everything below is the same `main.py` entry point with different flags — no
+extra installation needed for any of it, except the two clearly-marked optional
+backends (Gurobi, Hexaly) at the very end.
 
 ---
 
@@ -98,14 +133,39 @@ displayed.
 
 ### Optional backends and tests
 
-```bash
-# Optional: commercial backend for the alternative MILP (requires a license)
-pip install gurobipy
+Neither of these is needed to run the primary model — both are opt-in, and both fail
+gracefully (clear message, automatic fallback) if you skip them.
 
-# Optional: third backend, license-gated, falls back to CBC if absent (see FORMULATION.md §12)
+**Gurobi** (`--solver milp-gurobi`) — needs a license (free academic licenses are
+available from gurobi.com). Once you have one installed/activated on the machine:
+
+```bash
+pip install gurobipy
+python main.py --solver milp-gurobi
+```
+
+If `gurobipy` isn't installed or no license is found, `--solver milp-gurobi` will error
+clearly rather than silently fall back — use `milp-cbc` instead if you don't have a
+Gurobi license.
+
+**Hexaly** (`--solver hexaly`) — needs an academic or commercial license. Without one,
+it **automatically falls back to the CBC MILP** and prints setup instructions, so
+nothing breaks if you run `--solver hexaly` with no license at all:
+
+```bash
 pip install hexaly
 
-# Run the test suite (acceptance contract: hard constraints + cross-solver consistency)
+# Then point it at your license file:
+export HEXALY_LICENSE=/path/to/license.dat        # Linux/macOS
+$env:HEXALY_LICENSE = "C:\path\to\license.dat"     # Windows PowerShell
+
+python main.py --solver hexaly
+```
+
+**Tests** — the acceptance contract every solver's output is checked against (hard
+constraints, cross-solver consistency on the demo instance):
+
+```bash
 python tests/test_model.py
 ```
 
