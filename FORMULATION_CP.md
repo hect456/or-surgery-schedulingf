@@ -86,13 +86,13 @@ $$
 
 $$
 \min \quad
-\underbrace{\sum_{c:\,dd_c \ge 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + d\big]\, \text{pr}_{cdr}}_{\text{Term 1 — on-time cases, prefer earlier days}}
+\underbrace{\sum_{c:\ dd_c \ge 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + d\big]\ \text{pr}_{cdr}}_{\text{Term 1 — on-time cases, prefer earlier days}}
 \ +\
-\underbrace{\sum_{c:\,dd_c < 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + \alpha d\big]\, \text{pr}_{cdr}}_{\text{Term 2 — overdue cases, urgency multiplier }\alpha}
+\underbrace{\sum_{c:\ dd_c < 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + \alpha d\big]\ \text{pr}_{cdr}}_{\text{Term 2 — overdue cases, urgency multiplier }\alpha}
 \ +\
-\underbrace{\sum_{c:\,p_c \ne 4} w_c\, u_c}_{\text{Term 3 — non-scheduling penalty}}
+\underbrace{\sum_{c:\ p_c \ne 4} w_c\ u_c}_{\text{Term 3 — non-scheduling penalty}}
 \ +\
-\underbrace{\pi^{\text{ovf}} \sum_{c:\,\rho(c)\ne\text{none}} \text{overflow}_c}_{\text{Term 4 — bed-horizon overflow, new (§5.11)}}
+\underbrace{\pi^{\text{ovf}} \sum_{c:\ \rho(c)\ne\text{none}} \text{overflow}_c}_{\text{Term 4 — bed-horizon overflow, new (§5.11)}}
 $$
 
 Term 3 multiplies by $w_c$ **alone** — no separate $p_c$ factor. §6.1 below documents
@@ -141,7 +141,7 @@ as an explicit constraint row.
 ### 5.7 — C7: Room Capacity, Exact
 
 $$
-\texttt{AddNoOverlap}\big(\{\text{iv}_{cdr} : d, r \text{ fixed}\}\big) \qquad \forall d \in D,\, r \in R
+\texttt{AddNoOverlap}\big(\{\text{iv}_{cdr} : d, r \text{ fixed}\}\big) \qquad \forall d \in D,\ r \in R
 $$
 
 Declared over the **room** interval $\text{iv}_{cdr}$ (size $t_c^{\text{tot}}$): a room
@@ -151,10 +151,10 @@ cleaning buffer has elapsed.
 ### 5.8 — C8: Surgeon, Exact Non-Overlap on the Surgeon's OWN Interval
 
 $$
-\texttt{AddNoOverlap}\big(\{\text{sgiv}_{cdr} : \text{surgeon}(c)=h,\ d \text{ fixed}\}\big) \qquad \forall h \in H,\, d \in D
+\texttt{AddNoOverlap}\big(\{\text{sgiv}_{cdr} : \text{surgeon}(c)=h,\ d \text{ fixed}\}\big) \qquad \forall h \in H,\ d \in D
 $$
 $$
-\sum_{c:\,\text{surgeon}(c)=h} \sum_r t_c^{\text{op}}\, \text{pr}_{cdr} \le k_{hd} \qquad \forall h, d \quad \text{(kept, unchanged)}
+\sum_{c:\ \text{surgeon}(c)=h} \sum_r t_c^{\text{op}}\ \text{pr}_{cdr} \le k_{hd} \qquad \forall h, d \quad \text{(kept, unchanged)}
 $$
 
 **Corrected (§6.2): declared over $\text{sgiv}_{cdr}$ (size $t_c^{\text{op}}$), not
@@ -169,13 +169,13 @@ concurrency, not total hours worked.
 ### 5.9 — C9: Surgeon Weekly Limit (unchanged)
 
 $$
-\sum_{c:\,\text{surgeon}(c)=h} \sum_{d,r} t_c^{\text{op}}\, \text{pr}_{cdr} \le k_h \qquad \forall h \in H
+\sum_{c:\ \text{surgeon}(c)=h} \sum_{d,r} t_c^{\text{op}}\ \text{pr}_{cdr} \le k_h \qquad \forall h \in H
 $$
 
 ### 5.10 — C10: Shared Equipment, Exact Concurrency (unchanged)
 
 $$
-\texttt{AddCumulative}\big(\{\text{iv}_{cdr} : u_{c,e}=1,\ d \text{ fixed}\},\ \text{demands}=1,\ \text{capacity}=\kappa_{ed}\big) \qquad \forall e \in E,\, d \in D
+\texttt{AddCumulative}\big(\{\text{iv}_{cdr} : u_{c,e}=1,\ d \text{ fixed}\},\ \text{demands}=1,\ \text{capacity}=\kappa_{ed}\big) \qquad \forall e \in E,\ d \in D
 $$
 
 Declared over the **room** interval (equipment sits in the room for the full

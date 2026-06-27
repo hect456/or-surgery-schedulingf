@@ -381,7 +381,7 @@ x_{cdr} \in \{0,1\} \quad \forall c \in C,\ d \in D_c,\ r \in R
 $$
 $$
 z_c \in [0,1] \quad \forall c \in C : p_c \ne 4
-\qquad\text{— relaxed to a continuous bound; forced to \{0,1\} by C3 at the optimum}
+\qquad\text{— relaxed to a continuous bound; forced to binary by C3 at the optimum}
 $$
 
 As in the primary model, $x_{cdr}$ is only created for triples surviving the C4–C6
@@ -393,17 +393,17 @@ filter.
 
 $$
 \min \quad
-\sum_{c:\,dd_c \ge 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + d\big]\, x_{cdr}
+\sum_{c:\ dd_c \ge 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + d\big]\ x_{cdr}
 \ +\
-\sum_{c:\,dd_c < 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + \alpha d\big]\, x_{cdr}
+\sum_{c:\ dd_c < 0}\ \sum_{d \in D_c, r \in R} \big[dd_c + \alpha d\big]\ x_{cdr}
 \ +\
-\sum_{c:\,p_c \ne 4} w_c\, z_c
+\sum_{c:\ p_c \ne 4} w_c\ z_c
 $$
 
 Identical to the CP model's objective (§8), over $x_{cdr}/z_c$ instead of
 $\text{pr}_{cdr}/u_c$ — including the fix described in FORMULATION_CP.md §6.1: $w_c$
 already contains the priority multiplier $\mu_{p_c}$ (§A.3), so Term 3 multiplies by
-$w_c$ alone, with **no separate $p_c\,w_c\,z_c$ double-multiplication** (an earlier
+$w_c$ alone, with **no separate $p_c\ w_c\ z_c$ double-multiplication** (an earlier
 version of this code did exactly that, identically in both the MIP and CP paths — both
 were fixed together, since both called the same `penalty.py` function the same way).
 
@@ -418,7 +418,7 @@ exactly one implementation of $w_c$ in this codebase, not one per backend.
 
 **C1 — at most one scheduled occurrence per patient per week**
 $$
-\sum_{c:\,\text{patient}(c)=n} \sum_{d,r} x_{cdr} \le 1 \qquad \forall n
+\sum_{c:\ \text{patient}(c)=n} \sum_{d,r} x_{cdr} \le 1 \qquad \forall n
 $$
 
 **C2 — priority-4 cases must run on day 1**
@@ -436,7 +436,7 @@ pre-filter, exactly as in the CP model.
 
 **C7 — room capacity, as an aggregate sum (not exact non-overlap)**
 $$
-\sum_{c \in C} t_c^{\text{tot}}\, x_{cdr} \le k_{dr} \qquad \forall d \in D,\, r \in R
+\sum_{c \in C} t_c^{\text{tot}}\ x_{cdr} \le k_{dr} \qquad \forall d \in D,\ r \in R
 $$
 This is where the MIP and CP models structurally diverge (FORMULATION.md §3): this sum
 certifies durations *fit* the day, not that they don't *collide* — equivalent to exact
@@ -447,17 +447,17 @@ where the divergence becomes a real, measured difference (see RESULTS.md).
 **C8 — surgeon daily time limit (a sum only — no non-overlap variable exists in a MIP
 without a big-M reformulation, see §3)**
 $$
-\sum_{c:\,\text{surgeon}(c)=h} \sum_r t_c^{\text{op}}\, x_{cdr} \le k_{hd} \qquad \forall h \in H,\, d \in D
+\sum_{c:\ \text{surgeon}(c)=h} \sum_r t_c^{\text{op}}\ x_{cdr} \le k_{hd} \qquad \forall h \in H,\ d \in D
 $$
 
 **C9 — surgeon weekly time limit**
 $$
-\sum_{c:\,\text{surgeon}(c)=h} \sum_{d,r} t_c^{\text{op}}\, x_{cdr} \le k_h \qquad \forall h \in H
+\sum_{c:\ \text{surgeon}(c)=h} \sum_{d,r} t_c^{\text{op}}\ x_{cdr} \le k_h \qquad \forall h \in H
 $$
 
 **C10 — shared equipment, day-level aggregate cap**
 $$
-\sum_{c:\,u_{ce}=1} \sum_r x_{cdr} \le \kappa_{ed} \qquad \forall e \in E,\, d \in D
+\sum_{c:\ u_{ce}=1} \sum_r x_{cdr} \le \kappa_{ed} \qquad \forall e \in E,\ d \in D
 $$
 Counts *how many* equipment-$e$ cases land on day $d$, not whether their clock times
 overlap — the single largest source of the MIP/CP objective gap measured in RESULTS.md.
