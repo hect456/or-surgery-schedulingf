@@ -15,3 +15,10 @@ matplotlib>=3.8
 # trade-off comparison). Requires an academic licence — see
 # src/solvers/hexaly_solver.py for setup instructions.
 # hexaly
+
+# Optional: IBM ILOG CP Optimizer backend — a second CP engine, not a
+# re-skin of CP-SAT (sequence-dependent room turnover via a transition
+# matrix; see FORMULATION.md Appendix C). Requires a CP Optimizer engine
+# (local CPLEX Studio or DOcplexcloud) plus a licence — see
+# src/solvers/cp_optimizer_solver.py for setup instructions.
+# docplex

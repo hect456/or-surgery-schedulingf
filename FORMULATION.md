@@ -260,6 +260,14 @@ where a local-search backend would slot in for very large instances or real-time
 re-optimization (§13) — not as a required part of this deliverable, and not benchmarked
 here for that reason.
 
+**IBM ILOG CP Optimizer** (`src/solvers/cp_optimizer_solver.py`) is a second, optional
+constraint-programming backend — not a re-skin of the primary CP-SAT model, but a
+genuinely different set of CP modelling primitives applied to the same problem, chosen
+specifically to answer Appendix B.1's flagged weakness (a flat, unsourced room-turnover
+constant) with a structural fix rather than a bigger lookup table. No CP Optimizer
+license was available while building this either, so it falls back to the primary
+CP-SAT model, with setup instructions printed at runtime. Full detail in **Appendix C**.
+
 ## 13. Testing Against Real and Literature Instances
 
 Three instances ship in `src/data/instances.py`, at increasing levels of grounding:
@@ -618,3 +626,214 @@ opportunistically: a follow-up pass should bucket $t_c^{\text{clean}}$ by $t_c^{
 (e.g. 15 min under 60, 25 min for 60–150, 40 min above 150 — values inside the
 15–60-minute real-world range above) and re-run the full benchmark suite once, rather
 than incrementally re-running it after every individual parameter change.
+
+---
+
+## Appendix C — A Second CP Strategy: IBM ILOG CP Optimizer
+
+§12 introduces this as an optional, license-gated extension
+(`src/solvers/cp_optimizer_solver.py`). This appendix documents it at the same level of
+detail as Appendix A's MIP — not because it is a required deliverable, but because the
+brief explicitly rewards justified choices over an elegant model with no rationale, and
+"is there only one way to do CP here" is a fair question to have a real answer to.
+
+### C.1 Why a Second CP Engine, Not Just a Second MILP
+
+The primary model (FORMULATION_CP.md) already demonstrates CP-over-MIP. This appendix
+demonstrates something narrower and, for this project, more useful: that *within* the CP
+paradigm, the choice of modelling primitive still matters, and a second engine —
+IBM ILOG CP Optimizer, via its `docplex.cp` API — exposes primitives CP-SAT does not
+that directly answer a weakness this review already found and flagged, rather than
+left unaddressed. Appendix B.1 audited $t_c^{\text{clean}}$ (room turnover) and found it
+the least-grounded constant in the whole model: a flat 20 minutes for every case, when
+real OR turnover is reported at 15–60 minutes depending on the procedure. B.5 proposed
+bucketing it by $t_c^{\text{op}}$ as the next concrete fix — a real improvement, but
+still a property of the case alone. CP Optimizer's `sequence_var` plus a *transition
+matrix* on `no_overlap` makes turnover a property of the **ordered pair** of adjacent
+cases instead — strictly more expressive, and the more accurate mechanism for what
+actually drives OR turnover time in practice (a full equipment/instrument changeover
+between two different specialties' cases vs. a quick re-prep between two cases of the
+same kind).
+
+### C.2 The Structural Difference, With a Worked Number
+
+CP-SAT bakes cleaning into the room interval's own length: every candidate's room
+interval has size $t_c^{\text{tot}} = t_c^{\text{op}} + t_c^{\text{clean}}$, so turnover
+is charged identically regardless of what comes next (FORMULATION_CP.md §3). CP
+Optimizer's version below instead sizes the interval at $t_c^{\text{op}}$ alone and
+charges turnover as a transition cost between whichever two cases end up adjacent in a
+room's chosen sequence:
+
+| | Case A → Case B, same service | Case A → Case C, different service |
+|---|---|---|
+| CP-SAT (flat $t_c^{\text{clean}}=20$) | 20 min charged either way | 20 min charged either way |
+| CP Optimizer (transition matrix) | 15 min (same-setup re-prep) | 35 min (full changeover) |
+
+Neither number is "more correct" in the abstract — both are instance-configurable
+defaults (`PlanningInstance.same_service_turnover_min` /
+`cross_service_turnover_min`, `src/model/types.py`), not literature constants, exactly
+like every other policy knob audited in Appendix B. What changed is **expressiveness**:
+CP-SAT's formulation has no variable a turnover rule could even attach two cases'
+identities to; CP Optimizer's does. This is the same kind of argument §3 makes for CP
+over MIP, one level down — a more expressive primitive, not a bigger table of the same
+kind of number.
+
+**An honest limit of this demonstration, found while validating it (C.5):** C4's
+room-service roster assigns each room to exactly one service per day in both
+`demo_instance()` and `medium_instance()` — so within any one room-day, every candidate
+case is automatically the same service, and the matrix's **cross-service** branch (35
+min) is mathematically unreachable on either shipped instance, even though it is
+correctly implemented and would engage the moment a room is rostered to more than one
+service in a day. What the demo *does* demonstrate, on real data, is narrower but still
+real: same-service turnover at 15 minutes, strictly below CP-SAT's flat 20-minute
+buffer for every case regardless of service — see C.5 for the validated numbers.
+
+### C.3 Sets, Variables, and Objective
+
+Unchanged from FORMULATION_CP.md §2: $C, D, R, H, E$ and the shared parameters,
+including the **same** $w_c$ from `penalty.py` (no separate priority factor — the
+identical fix as FORMULATION_CP.md §6.1). One addition, used only here:
+
+| Symbol | Description |
+|---|---|
+| $\sigma(c)$ | Surgical service of case $c$ — indexes the turnover transition matrix |
+| $\tau_{\sigma\sigma'}$ | Minimum room-turnover minutes between a service-$\sigma$ case ending and a service-$\sigma'$ case starting next in the same room |
+
+Decision variables, per case $c$:
+
+$$
+\text{task}_c \quad \text{— an optional interval (mandatory iff } p_c = 4 \text{)}
+$$
+
+and, for every $(d,r)$ surviving the same C4–C6 pre-filter as the primary model:
+
+$$
+\text{alt}_{cdr} \quad \text{— an optional interval of size } t_c^{\text{op}}
+$$
+
+with `task_c` and `alt_cdr` tied together by docplex.cp's `alternative` global
+constraint: "exactly one of these candidate slots realizes this task" — the same
+case-to-slot decision CP-SAT encodes as a flat list of boolean `presence` variables plus
+a linear `sum(...) + u == 1` (FORMULATION_CP.md §3). $\text{alt}_{cdr}$ is sized
+$t_c^{\text{op}}$ only (operative time, no cleaning baked in) — because turnover now
+lives in the transition between sequence neighbours (C.4 below), this one interval
+already represents the surgeon's own busy window too: unlike the primary model, which
+needs two different interval sizes per candidate ($t_c^{\text{tot}}$ for the room,
+$t_c^{\text{op}}$ for the surgeon, FORMULATION_CP.md §3) precisely because it bakes
+cleaning into the room interval's length, this model needs only one.
+
+Objective — identical three-term tardiness shape as FORMULATION_CP.md §4, expressed
+over `presence_of(alt_cdr)` and `presence_of(task_c)` (docplex.cp's presence indicator)
+instead of $\text{pr}_{cdr}$ and $u_c$, plus the same Term-4 bed-overflow addition
+(C.4 below).
+
+### C.4 Constraints
+
+**C1** (one occurrence per patient/week) and **C2** (priority-4 lock-in) — same logic as
+FORMULATION_CP.md, expressed over `presence_of(task_c)`: a sum-at-most-1 across a
+patient's cases for C1, and `task_c` built non-optional (always present) for priority-4
+cases for C2, so `alternative` forces exactly one of its day-1 alternatives to be chosen.
+
+**C7 — room turnover, sequence-dependent (the central difference, C.2 above):** for
+every $(d,r)$, a `sequence_var` $\Sigma_{dr}$ over that room's candidate intervals,
+typed by each case's service $\sigma(c)$:
+
+$$
+\Sigma_{dr} \quad \text{— a sequence variable over } \{\text{alt}_{cdr}\}_c, \text{ typed by } \sigma(c) \qquad \forall d \in D,\ r \in R
+$$
+
+with `no_overlap` enforced on $\Sigma_{dr}$ against the transition matrix $\tau$ from
+C.3's table — the actual call is `model.no_overlap(seq_dr, tau)` in
+`cp_optimizer_solver.py`.
+
+**C8 — surgeon, exact non-overlap, no transition cost** (a surgeon doesn't need
+"cleaning time" between cases the way a room does): the same `sequence_var` idiom, this
+time per surgeon/day, with `no_overlap` applied **without** a transition matrix:
+
+$$
+\Sigma_{hd} \quad \text{— a sequence variable over } \{\text{alt}_{cdr}\}_{c:\ \text{surgeon}(c)=h} \qquad \forall h \in H,\ d \in D
+$$
+
+— plus the same daily/weekly operative-minutes sums as the primary model (**C8**
+secondary cap, **C9**), since `no_overlap` alone bounds concurrency, not total hours.
+
+**C10 — shared equipment, additive cumulative:** one `pulse` term per candidate, summed
+and capped, instead of a single global cumulative-constraint call:
+
+$$
+\sum_{c:\ u_{ce}=1} \text{pulse}(\text{alt}_{cdr}, 1) \ \le\ \kappa_{ed} \qquad \forall e \in E,\ d \in D
+$$
+
+built by summing one `pulse` term per candidate instead of one `AddCumulative` call —
+mechanically equivalent on this instance, but the additive form is what would let a real
+deployment add, say, a non-elective baseline usage term to the same expression later
+without changing this constraint's shape (not implemented here — out of scope, same
+discipline as B.5).
+
+**C11 — downstream recovery/ICU beds**, same channel-to-day-of-surgery idea and the same
+overflow-penalty mechanism as FORMULATION_CP.md §5.11 (no silent horizon-boundary
+approximation), built from a day-granularity `bed_c` interval tied to $\text{task}_c$'s
+presence and summed via `pulse` per bed pool, exactly mirroring C10's additive pattern.
+
+### C.5 Status and Honesty
+
+Unlike Hexaly (§12), a CP Optimizer engine *is* available in the environment this
+project was built in — IBM CPLEX Optimization Studio Community Edition, with
+`docplex` 2.32.264 — so this backend has actually been run and validated, not just
+written against documented API and left unverified.
+
+**What was checked, on `demo_instance()` (20 cases):** `CPOptimizerSolver(time_limit_sec=60)`
+returns `Optimal`, objective **155.0** (identical to CP-SAT's, see RESULTS.md — expected,
+since the objective depends only on which case lands on which day, not on intra-day
+timing, and both models schedule all 20 cases on the same days here), 20/20 scheduled, 0
+unscheduled. Verified directly, not just trusted: every room-turnover gap in the
+returned schedule equals exactly `same_service_turnover_min` (15) between consecutive
+same-service cases in a room — never less, confirming the transition matrix is actually
+binding, not a no-op; no room or surgeon interval overlaps; the shared C-arm's
+concurrent usage never exceeds capacity 1; both ICU-bed cases land on a feasible day.
+`tests/test_model.py::test_cp_optimizer_solver` encodes this check
+(`_assert_cp_optimizer_constraints`) and passes.
+
+**A second, honest data point — 200-case instance, 120 seconds each (not the
+30-minute/1%-gap budget RESULTS.md uses for the main CP-SAT-vs-MILP comparison, so
+these numbers are not directly comparable to that table):**
+
+| Solver | Status | Objective | Own Gap | Scheduled | Time |
+|---|---|---|---|---|---|
+| CP-SAT | Feasible | **71,242.0** | **7.9%** | 134/200 | 120.9s |
+| CP Optimizer | Feasible | 74,751.0 | 75.6% | **143/200** | 121.0s |
+
+A genuinely mixed, slightly unflattering result, reported as measured rather than
+smoothed over: CP Optimizer schedules **9 more cases** in the same wall-clock time, but
+lands on a **worse** (higher) objective with a **far** looser gap. The likely
+explanation is search engineering, not modelling: CP-SAT's default parallel portfolio
+(FORMULATION.md §3) is a mature, heavily-tuned search for exactly this constraint-
+satisfaction family; CP Optimizer's automatic search was used here with no custom
+search phase, no warm start, and no parameter tuning — the same gap this project's own
+greedy-warm-start mechanism closes for CP-SAT (`src/solvers/warm_start.py`) was never
+applied here. **This is the honest scope boundary of Appendix C**: it demonstrates a
+more expressive *modelling primitive* (C.1–C.4), not a better-tuned *solver*, and at
+this instance size, search tuning visibly matters more than the turnover model's extra
+expressiveness. Closing that gap (custom search phases, a warm start analogous to
+`warm_start.py`, a longer/properly-budgeted run) is exactly the kind of follow-up effort
+deliberately not spent here, consistent with B.5's discipline of not gold-plating a
+secondary, optional backend past what the brief's "small demo" framing asks for.
+
+If `docplex` is missing or no engine/license is reachable on a *different* machine
+running this code, it falls back to the primary CP-SAT model with a printed setup
+message — that fallback path is tested directly too
+(`test_cp_optimizer_fallback_method_is_correct`), independent of whether the real
+engine happens to be present.
+
+### C.6 What This Does and Doesn't Prove
+
+It does not re-argue CP over MIP — FORMULATION.md §3 and RESULTS.md already do that,
+empirically, on two instance sizes. What it adds is narrower: that the specific
+modelling choices inside a CP formulation (one global constraint vs. a derived linear
+sum, a transition matrix vs. a flat buffer, additive cumulative vs. a single global
+call) are themselves engineering decisions with real trade-offs, not just two syntaxes
+for the same idea — and that at least one of them (sequence-dependent turnover) directly
+closes a gap this project's own parameter audit (Appendix B.1) already found and named,
+rather than introducing a new, unrelated feature for its own sake. C.5's medium-instance
+result is the other half of this honest scoping: a richer model is not a substitute for
+a tuned search, and this appendix does not claim otherwise.

@@ -216,6 +216,18 @@ class PlanningInstance:
     # FORMULATION.md's parameter-justification appendix.
     weekend_bed_overflow_penalty: float = 50.0
 
+    # Sequence-dependent room turnover, used ONLY by the optional CP
+    # Optimizer backend (src/solvers/cp_optimizer_solver.py, FORMULATION.md
+    # Appendix C) to demonstrate a structurally different way to capture
+    # what FORMULATION.md Appendix B.1 already flags as the model's
+    # least-grounded constant: a flat t_clean for every case, when real OR
+    # turnover (15-60 min) actually depends on what precedes/follows, not
+    # just on the case itself. The primary CP-SAT model and the comparison
+    # MILP are UNCHANGED by these fields — both still use SurgicalCase.
+    # t_clean exactly as before; nothing here alters their behaviour.
+    same_service_turnover_min: int = 15    # back-to-back cases, same service
+    cross_service_turnover_min: int = 35   # service switch — full changeover
+
     def __post_init__(self):
         self._validate()
 

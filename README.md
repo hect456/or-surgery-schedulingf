@@ -85,13 +85,14 @@ python main.py [--instance demo|medium|chln] [--solver <name>] [--time-limit SEC
 | `milp-gurobi` | Same MIP, commercial backend | Identical formulation to `milp-cbc`, routed through native `gurobipy` instead of CBC. Converges to a *proven* optimum far faster (seconds vs. tens of minutes at the 200-case scale). | When you need the MIP's true optimum as a benchmark reference, not just a 30-minute feasible bound (see RESULTS.md Step 1). |
 | `milp-scip` | Same MIP, SCIP backend | Another OR-Tools-bundled backend for the same MIP formulation, no extra install. | A free alternative to CBC if you want to cross-check solver-specific behavior. |
 | `hexaly` | Local-search metaheuristic | Real (non-stub) integration against Hexaly's API, written as a set-partition formulation. **Falls back to `milp-cbc` automatically** if `hexaly` isn't installed/licensed, printing setup instructions. | Optional extension point for very large instances or same-day re-optimization (FORMULATION.md §14) — not required to see the core model run. |
+| `cp-optimizer` | Interval-based **CP, second engine** | Real (non-stub) integration against IBM ILOG CP Optimizer's `docplex.cp` API — not a re-skin of CP-SAT: uses `alternative()` for case-to-slot assignment and `sequence_var`/`no_overlap` with a **transition matrix** for sequence-dependent room turnover. **Falls back to `cp-sat` automatically** if `docplex` isn't installed/licensed, printing setup instructions. | Optional — demonstrates a structurally different CP idiom that directly answers FORMULATION.md Appendix B.1's flagged "turnover is a flat constant" critique. See FORMULATION.md Appendix C. |
 | `greedy` | Constructive heuristic | Sorts cases by priority/deadline and packs them in greedily, no solver involved. | Sanity-check lower bound, or a warm-start signal for the other solvers — never the final answer. |
 
-Two backend families, one objective: every solver above optimizes the *same* shared
+Three backend families, one objective: every solver above optimizes the *same* shared
 `w_c` penalty (`src/model/penalty.py`) over the *same* `PlanningInstance` — only how
 each one expresses "don't double-book a resource" differs (exact time intervals for
-CP-SAT, aggregate day-level sums for the MIP family). That's the whole comparison
-RESULTS.md is built on.
+CP-SAT, a transition matrix between sequence neighbours for CP Optimizer, aggregate
+day-level sums for the MIP family). That's the whole comparison RESULTS.md is built on.
 
 ### Choosing an instance
 
@@ -112,9 +113,9 @@ RESULTS.md is built on.
 - `--plot PATH` — saves a Gantt-style PNG of the resulting schedule (`src/utils/visualizer.py`):
   `python main.py --solver cp-sat --plot demo.png`.
 - `--benchmark` — ignores `--solver` and runs *every* available backend (Greedy,
-  CP-SAT, CBC, Gurobi if installed, Hexaly if licensed) back-to-back on the same
-  instance, then prints a comparison table. This is what produced every table in
-  RESULTS.md:
+  CP-SAT, CBC, Gurobi if installed, Hexaly if licensed, CP Optimizer if licensed)
+  back-to-back on the same instance, then prints a comparison table. This is what
+  produced every table in RESULTS.md:
   ```bash
   python main.py --instance demo --benchmark --gap 0.0001
   ```
@@ -133,7 +134,7 @@ displayed.
 
 ### Optional backends and tests
 
-Neither of these is needed to run the primary model — both are opt-in, and both fail
+None of these are needed to run the primary model — all three are opt-in, and all fail
 gracefully (clear message, automatic fallback) if you skip them.
 
 **Gurobi** (`--solver milp-gurobi`) — needs a license (free academic licenses are
@@ -162,6 +163,20 @@ $env:HEXALY_LICENSE = "C:\path\to\license.dat"     # Windows PowerShell
 python main.py --solver hexaly
 ```
 
+**CP Optimizer** (`--solver cp-optimizer`) — needs an IBM CP Optimizer engine (a local
+CPLEX Optimization Studio install, or DOcplexcloud credentials) plus a license. Without
+one, it **automatically falls back to CP-SAT** and prints setup instructions, so
+nothing breaks if you run `--solver cp-optimizer` with no license at all:
+
+```bash
+pip install docplex
+# then point docplex at a local CPLEX Studio install or a DOcplexcloud account —
+# see src/solvers/cp_optimizer_solver.py's module docstring for the exact setup,
+# and FORMULATION.md Appendix C for what this backend models differently from CP-SAT.
+
+python main.py --solver cp-optimizer
+```
+
 **Tests** — the acceptance contract every solver's output is checked against (hard
 constraints, cross-solver consistency on the demo instance):
 
@@ -177,7 +192,7 @@ python tests/test_model.py
 or-surgery-scheduling/
 ├── main.py                       # CLI entry point + optional comparison mode
 ├── FORMULATION.md                # Master doc: problem, evidence, why CP, assumptions, shared sets/params
-│                                  #   + Appendix A (MIP in detail) + Appendix B (parameter justification audit)
+│                                  #   + Appendix A (MIP), B (parameter audit), C (CP Optimizer, optional)
 ├── FORMULATION_CP.md             # Full CP-SAT math (variables/objective/constraints C1-C11)
 │                                  #   + two corrections found during review, with worked numeric examples
 ├── RESULTS.md                    # Demo results + the CP-vs-MIP comparison that validates the choice
@@ -194,6 +209,7 @@ or-surgery-scheduling/
 │   │   ├── cp_sat_interval_solver.py # OR-Tools CP-SAT, interval-based — PRIMARY model
 │   │   ├── milp_baseline_solver.py   # OR-Tools MPSolver (CBC) + native gurobipy — comparison MILP
 │   │   ├── hexaly_solver.py          # Hexaly local-search backend — optional, graceful fallback
+│   │   ├── cp_optimizer_solver.py    # IBM ILOG CP Optimizer — optional, graceful fallback to CP-SAT
 │   │   └── greedy_solver.py          # Constructive heuristic (warm-start / sanity bound)
 │   │
 │   ├── data/
