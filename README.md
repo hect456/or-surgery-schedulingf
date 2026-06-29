@@ -153,7 +153,7 @@ cases land where and why the comparison MILP can't reach that schedule at all.
 
 ## Open questions
 
-**Passing this off to a developer.** FORMULATION.md §14 has the full answer; short
+**Passing this off to a developer.** FORMULATION.md §13 has the full answer; short
 version: this file plus the data dictionary in `src/model/types.py`, the solver code
 with matching C-numbered comments, `tests/test_model.py` as the acceptance bar, and a
 short glossary of the few domain terms that aren't self-explanatory — most
