@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-main.py — Demo runner for Elective Surgery Scheduling.
+main.py — demo runner for elective surgery scheduling.
 
-The primary model is the interval-based CP-SAT solver (FORMULATION_CP.md has
-the full math; FORMULATION.md §3 argues why CP over MIP). The MILP, Hexaly,
-and CP Optimizer backends are optional comparison/extension points
-(FORMULATION.md §12, Appendix A, Appendix C) — useful for `--benchmark`,
-not required to see the primary model run.
+CP-SAT (src/solvers/cp_sat_interval_solver.py) is the model this project is
+built around — see FORMULATION.md for why. Everything else --solver accepts
+is an optional comparison point, off by default: a day-bucket MILP
+(CBC/SCIP/Gurobi/CPLEX) and IBM CP Optimizer, both discussed only in
+FORMULATION.md's appendix.
 
 Usage
 -----
-    python main.py                          # demo instance, primary CP-SAT model
-    python main.py --instance medium        # ~200-case scaling instance
-    python main.py --solver milp-cbc        # alternative MILP, for comparison
-    python main.py --solver milp-gurobi     # alternative MILP, Gurobi backend
-    python main.py --solver hexaly          # optional, falls back to CBC if unlicensed
-    python main.py --solver cp-optimizer    # optional, falls back to CP-SAT if unlicensed
-    python main.py --solver greedy          # heuristic, no solver needed
+    python main.py                          # demo instance, CP-SAT
+    python main.py --instance medium        # ~200-case instance, CP-SAT
+    python main.py --solver milp-cbc        # comparison MILP, open-source backend
+    python main.py --solver milp-gurobi     # comparison MILP, Gurobi backend (needs a license)
+    python main.py --solver milp-cplex      # comparison MILP, CPLEX backend (needs a license)
+    python main.py --solver cp-optimizer    # second CP engine (needs a license; falls back to CP-SAT)
     python main.py --benchmark              # run every available solver, compare
     python main.py --time-limit 60          # solver time limit (seconds)
 
-The script prints a human-readable weekly schedule to stdout.
+Prints a human-readable weekly schedule to stdout.
 """
 
 import argparse
@@ -34,11 +33,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
-from src.data.instances import demo_instance, medium_instance, literature_chln_instance
+from src.data.instances import demo_instance, medium_instance
 from src.solvers.milp_baseline_solver import MILPBaselineSolver
 from src.solvers.cp_sat_interval_solver import CPSATIntervalSolver
-from src.solvers.greedy_solver import GreedySolver
-from src.solvers.hexaly_solver import HexalySolver
 from src.solvers.cp_optimizer_solver import CPOptimizerSolver
 from src.utils.reporter import print_header, print_result
 from src.utils.visualizer import plot_schedule
@@ -47,7 +44,6 @@ from src.utils.visualizer import plot_schedule
 INSTANCES = {
     "demo":      demo_instance,
     "medium":    medium_instance,
-    "chln":      literature_chln_instance,   # calibrated to real, published CHLN statistics
 }
 
 
@@ -59,16 +55,14 @@ def get_solver(name: str, time_limit: int, gap: float):
         return MILPBaselineSolver(backend="GUROBI", time_limit_sec=time_limit, mip_gap=gap)
     elif name in ("milp-scip", "scip"):
         return MILPBaselineSolver(backend="SCIP", time_limit_sec=time_limit, mip_gap=gap)
+    elif name in ("milp-cplex", "cplex"):
+        return MILPBaselineSolver(backend="CPLEX", time_limit_sec=time_limit, mip_gap=gap)
     elif name in ("cp-sat", "cpsat", "interval"):
         return CPSATIntervalSolver(time_limit_sec=time_limit, mip_gap=gap)
-    elif name == "hexaly":
-        return HexalySolver(time_limit_sec=time_limit, mip_gap=gap)
     elif name in ("cp-optimizer", "cpo", "ibm-cp"):
         return CPOptimizerSolver(time_limit_sec=time_limit, mip_gap=gap)
-    elif name == "greedy":
-        return GreedySolver()
     else:
-        print(f"Unknown solver '{name}'. Defaulting to cp-sat (the primary model).")
+        print(f"Unknown solver '{name}'. Defaulting to cp-sat.")
         return CPSATIntervalSolver(time_limit_sec=time_limit, mip_gap=gap)
 
 
@@ -77,11 +71,11 @@ def main():
     parser.add_argument("--instance", choices=list(INSTANCES.keys()), default="demo",
                          help="Which instance to solve (default: demo)")
     parser.add_argument("--solver", default="cp-sat",
-                         help="cp-sat (primary) | milp-cbc | milp-gurobi | milp-scip | hexaly | "
-                              "cp-optimizer | greedy")
+                         help="cp-sat (default) | milp-cbc | milp-gurobi | milp-scip | milp-cplex | "
+                              "cp-optimizer")
     parser.add_argument("--benchmark", action="store_true",
-                         help="Optional: run every available solver and print a comparison "
-                              "table (used to validate the cp-sat-vs-MILP choice in RESULTS.md)")
+                         help="Run CP-SAT alongside the optional comparison backends and print "
+                              "a table (see RESULTS.md)")
     parser.add_argument("--time-limit", type=int, default=120,
                          help="Solver time limit in seconds (default: 120)")
     parser.add_argument("--gap", type=float, default=0.01,
@@ -105,16 +99,13 @@ def main():
 
 
 def _run_benchmark(instance, time_limit: int, gap: float):
-    """Optional comparison mode: runs the alternative MILP/Hexaly backends
-    alongside the primary CP-SAT model so the choice argued for in
-    FORMULATION.md §3 can be checked empirically (this is what RESULTS.md
-    is built from) — not required to see the primary model run."""
+    """Runs CP-SAT next to the optional comparison backends on the same
+    instance, so the choice made in FORMULATION.md can be checked, not
+    just asserted — this is what RESULTS.md is built from."""
     candidates = [
-        ("Greedy",         GreedySolver()),
         ("CP-SAT/Interval", CPSATIntervalSolver(time_limit_sec=time_limit, mip_gap=gap)),
         ("OR-Tools/CBC",   MILPBaselineSolver(backend="CBC", time_limit_sec=time_limit, mip_gap=gap)),
         ("Gurobi",         MILPBaselineSolver(backend="GUROBI", time_limit_sec=time_limit, mip_gap=gap)),
-        ("Hexaly",         HexalySolver(time_limit_sec=time_limit, mip_gap=gap)),
         ("CP Optimizer",   CPOptimizerSolver(time_limit_sec=time_limit, mip_gap=gap)),
     ]
 
@@ -139,8 +130,7 @@ def _run_benchmark(instance, time_limit: int, gap: float):
         obj   = f"{r.objective_value:.1f}" if r.objective_value else "N/A"
         # Never assume a zero gap for an unreported value: Gurobi and CP-SAT
         # both terminate "Optimal" once within their configured relative
-        # gap, which can be > 0% (see RESULTS.md). Show "-" only when the
-        # solver genuinely doesn't track a bound (Greedy).
+        # gap, which can be > 0% (see RESULTS.md).
         gap   = f"{r.gap*100:.2f}%" if r.gap is not None else "-"
         print(f"  | {r.solver_name:<22} | {r.status:<9} | {obj:<9} | {gap:<7} | {sched:<9} | "
               f"{r.solve_time_sec:<8.3f} |")

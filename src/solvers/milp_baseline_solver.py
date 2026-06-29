@@ -1,43 +1,26 @@
 """
-milp_baseline_solver.py — Baseline MILP. CBC/SCIP via Google OR-Tools'
-linear_solver (MPSolver); Gurobi via the native `gurobipy` API.
+milp_baseline_solver.py — a day-bucket MILP, kept only as the comparison
+point that motivates the CP-SAT model in cp_sat_interval_solver.py (see
+FORMULATION.md, "Why CP, not a bigger MILP"). This is not the model the
+project is built around — it exists so that claim can be checked, not just
+asserted: run both on the same instance and look at what each one can and
+can't express.
 
-Why OR-Tools' MPSolver for CBC/SCIP (rather than PuLP/Pyomo)?
----------------------------------------------------------------
-MPSolver is a single, solver-agnostic Python API that drives CBC and SCIP
-by passing one string to `pywraplp.Solver.CreateSolver`. Both ship *inside*
-the `ortools` pip wheel — no external solver binary needs to be installed
-or put on PATH. That is a real practical win on a fresh machine (this is
-literally why the repo's previous PuLP+Pyomo stack couldn't run out of the
-box here: it needed a separately-installed CBC executable).
+Same sets, same objective, same C1-C6/C9 as the CP-SAT model. The
+difference is C7 (room capacity) and C10 (equipment): here they're linear
+capacity sums over a day, not exact NoOverlap/Cumulative — "total minutes
+used today <= room capacity" rather than "no two cases occupy the room at
+the same minute". For a single, non-shared room those say the same thing.
+For a resource several rooms share (a portable imaging unit, in this
+project's demo data) they don't, and that gap is exactly where the CP-SAT
+model finds schedules this one can't express. There's also no equivalent
+of C11 (recovery/ICU beds): a day-bucket model has no notion of "day of
+surgery" as a value a multi-day bed stay could start counting from.
 
-Why native gurobipy for Gurobi, instead of OR-Tools' GUROBI backend?
------------------------------------------------------------------------
-OR-Tools' `pywraplp.Solver.CreateSolver("GUROBI")` is a thin ABI shim onto
-the Gurobi C library and segfaulted in this environment against the
-installed Gurobi 12.0.2 (an OR-Tools/Gurobi version-pairing issue, not a
-modelling one). `gurobipy` itself works fine here (confirmed: valid
-academic licence, solves directly). Production teams hit version-pairing
-issues like this routinely when stacking wrapper-of-wrapper solver layers
-— the pragmatic fix is to talk to Gurobi's own supported API directly
-rather than through an intermediary, which is what `_solve_gurobi` below
-does. The formulation is identical either way; only the rendering layer
-differs.
-
-This is the ALTERNATIVE formulation discussed in FORMULATION.md §12 — kept as
-a comparison point that justifies choosing CP-SAT (cp_sat_interval_solver.py)
-as the primary model, not as a second co-equal deliverable:
-  - Decision variables : x_{cdr} in {0,1}  and  z_c >= 0
-  - Objective           : three-term weighted tardiness + non-scheduling penalty
-  - Constraints         : C1-C6 and C9 unchanged from FORMULATION.md; C7 (room)
-                           and C10 (equipment) are linear capacity SUMS here,
-                           not NoOverlap/Cumulative — the day-bucket
-                           approximation FORMULATION.md §3 argues against;
-                           no C11 (a day-bucket model cannot express a
-                           multi-day bed stay correctly).
-
-It reasons at day+room granularity (no intraday clock times). RESULTS.md
-reports a head-to-head run against the CP-SAT model on the same data.
+CBC/SCIP run through OR-Tools' MPSolver (bundled with the ortools wheel,
+no separate install). Gurobi runs through the native gurobipy API instead
+of OR-Tools' GUROBI passthrough, which segfaulted against the Gurobi
+build available while writing this — gurobipy itself works fine.
 """
 
 from __future__ import annotations
@@ -47,7 +30,6 @@ from typing import Dict, Tuple
 from ..model.types import PlanningInstance, Assignment, SolverResult, Priority
 from ..model.penalty import compute_all_penalties
 from .base_solver import BaseSolver
-from .warm_start import greedy_warm_start
 
 
 def _feasible_triples(instance: PlanningInstance):
@@ -87,12 +69,12 @@ class MILPBaselineSolver(BaseSolver):
                   (forced to {0,1} by constraint C3)
     """
 
-    def __init__(self, backend: str = "CBC", time_limit_sec: int = 120, mip_gap: float = 0.01,
-                 warm_start: bool = True):
+    def __init__(self, backend: str = "CBC", time_limit_sec: int = 120, mip_gap: float = 0.01):
         super().__init__(time_limit_sec, mip_gap)
         self.backend = backend.upper()
-        self.name = f"OR-Tools/{self.backend}" if self.backend != "GUROBI" else "Gurobi"
-        self.warm_start = warm_start   # seed the search with the greedy heuristic's assignment
+        if self.backend == "CPLEX":
+            self.backend = "CPLEX_MIXED_INTEGER_PROGRAMMING"  # OR-Tools' name for it
+        self.name = {"GUROBI": "Gurobi"}.get(self.backend, f"OR-Tools/{backend.upper()}")
 
     def _build_and_solve(self, instance: PlanningInstance) -> SolverResult:
         if self.backend == "GUROBI":
@@ -114,8 +96,11 @@ class MILPBaselineSolver(BaseSolver):
 
         solver = pywraplp.Solver.CreateSolver(backend)
         if solver is None:
-            raise RuntimeError(f"OR-Tools backend '{backend}' unavailable "
-                                f"(CBC should always ship with ortools).")
+            raise RuntimeError(
+                f"OR-Tools backend '{backend}' unavailable. CBC and SCIP ship "
+                f"inside the ortools wheel and should always work; CPLEX needs "
+                f"a licensed CPLEX install OR-Tools was built against."
+            )
         # Note: the bundled CBC build doesn't honor a relative-gap stopping
         # criterion via MPSolver's generic parameter string, so this path
         # runs to proven optimality or the time limit, whichever is first
@@ -150,9 +135,6 @@ class MILPBaselineSolver(BaseSolver):
 
         self._add_constraints_ortools(solver, instance, feasible, x, z)
 
-        if self.warm_start:
-            self._apply_warm_start_ortools(solver, instance, x, z)
-
         status_code = solver.Solve()
         status_map = {
             pywraplp.Solver.OPTIMAL: "Optimal", pywraplp.Solver.FEASIBLE: "Feasible",
@@ -183,17 +165,6 @@ class MILPBaselineSolver(BaseSolver):
         return SolverResult(status=status, objective_value=obj_val, assignments=assignments,
                              unscheduled_case_ids=unscheduled, solve_time_sec=0.0,
                              solver_name=self.name, gap=gap)
-
-    def _apply_warm_start_ortools(self, solver, instance, x, z):
-        assigned, unsched = greedy_warm_start(instance)
-        hint_vars, hint_vals = [], []
-        for (cid, d, rid), var in x.items():
-            hint_vars.append(var)
-            hint_vals.append(1.0 if assigned.get(cid) == (d, rid) else 0.0)
-        for cid, var in z.items():
-            hint_vars.append(var)
-            hint_vals.append(1.0 if cid in unsched else 0.0)
-        solver.SetHint(hint_vars, hint_vals)
 
     def _add_constraints_ortools(self, solver, instance, feasible, x, z):
         cases, days = instance.cases, instance.days
@@ -271,13 +242,6 @@ class MILPBaselineSolver(BaseSolver):
             x = {k: m.addVar(vtype=GRB.BINARY, name=f"x_{k[0]}_{k[1]}_{k[2]}") for k in feasible}
             z = {c.id: m.addVar(lb=0.0, ub=1.0, name=f"z_{c.id}")
                  for c in cases if c.priority != Priority.EMERGENT_ADDON}
-
-            if self.warm_start:
-                assigned, unsched = greedy_warm_start(instance)
-                for (cid, d, rid), var in x.items():
-                    var.Start = 1.0 if assigned.get(cid) == (d, rid) else 0.0
-                for cid, var in z.items():
-                    var.Start = 1.0 if cid in unsched else 0.0
 
             m.setObjective(
                 gp.quicksum(_objective_coeff(instance, case_map[cid], d) * var

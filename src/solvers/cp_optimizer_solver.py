@@ -1,18 +1,17 @@
 """
-cp_optimizer_solver.py — IBM ILOG CP Optimizer backend (docplex.cp), an
-OPTIONAL, license-gated alternative to the primary CP-SAT model. See
-FORMULATION.md Appendix C for the full variables/objective/constraints
-math and the worked example motivating it. This file is the
-implementation half of that appendix — read them side by side.
+cp_optimizer_solver.py — IBM ILOG CP Optimizer backend (docplex.cp). This is
+an optional, license-gated alternative kept for one reason: it can express
+sequence-dependent room turnover, which the primary CP-SAT model (still the
+better choice for this project overall — see FORMULATION.md, appendix)
+can't without restructuring. See FORMULATION.md's appendix for the full
+math; this file is its implementation.
 
-What is CP Optimizer, and why a SECOND constraint-programming engine?
------------------------------------------------------------------------
+Why a second constraint-programming engine, specifically?
+-----------------------------------------------------------
 IBM ILOG CP Optimizer (https://www.ibm.com/products/ilog-cplex-optimization-
 studio) is, like OR-Tools CP-SAT, an interval-based constraint solver for
-disjunctive/resource-constrained scheduling — but it is not a re-skin of
-the same idea. Three of its modelling primitives have no equivalent in the
-CP-SAT model in cp_sat_interval_solver.py, and each one is used below for
-a genuine, justified reason, not novelty for its own sake:
+disjunctive/resource-constrained scheduling — but a few of its primitives
+have no equivalent in cp_sat_interval_solver.py:
 
   1. `alternative(task, [alt1, alt2, ...])` — a dedicated global constraint
      for "assign this task to exactly one of several candidate resource/
@@ -24,26 +23,22 @@ a genuine, justified reason, not novelty for its own sake:
 
   2. `sequence_var(...)` + `no_overlap(seq, transition_matrix)` — lets
      room turnover depend on WHICH TWO CASES ARE ADJACENT, not just on
-     the case's own fixed duration. The primary CP-SAT model bakes a flat
-     `t_clean` into every room interval's own length, regardless of what
-     comes next (FORMULATION.md Appendix B.1 already flags this as the
-     model's least-grounded constant: real OR turnover is 15-60 min and
-     depends on the procedure, not a flat 20 minutes for every case). This
-     model answers that critique with a *structurally different*
-     mechanism — sequence-dependent transition time — not just a bigger
-     bucket table: same-service-to-same-service turnover is shorter (the
-     room keeps the same equipment setup) than a cross-service switch
-     (full changeover). See FORMULATION.md Appendix C.2 for the worked
-     numeric contrast against CP-SAT's fixed-buffer model.
+     each case's own duration. CP-SAT buckets `t_clean` by the case's own
+     duration (instances.py), which captures part of the real 15-60 minute
+     spread in OR turnover — but it's still a property of one case alone.
+     This model goes one step further: turnover is a property of the
+     ordered *pair*, so same-service-to-same-service turnover (the room
+     keeps the same equipment setup) is shorter than a cross-service
+     switch (full changeover) — see FORMULATION.md's appendix for the
+     worked numeric contrast.
 
   3. Cumulative resource usage built ADDITIVELY from `pulse(interval, h)`
      terms summed and compared against a capacity, instead of one
      `AddCumulative(...)` global-constraint call. Mechanically equivalent
-     here, but the additive form is what lets a real deployment fold in,
-     e.g., a baseline non-elective equipment usage term later without
-     touching this constraint's shape — noted in FORMULATION.md Appendix
-     C, not implemented here (out of scope; same "document, don't
-     gold-plate" discipline as the rest of this project).
+     here, but the additive form is what would let a real deployment fold
+     in, e.g., a baseline non-elective equipment usage term later without
+     touching this constraint's shape — not implemented here, out of scope
+     for this project.
 
 Installation / commercial licence
 ----------------------------------
@@ -55,20 +50,11 @@ Installation / commercial licence
     # CpoModel.solve()). See IBM's docplex docs for the exact licence path
     # for your account type.
 
-Status: unlike Hexaly, a real CP Optimizer engine (IBM CPLEX Optimization
-Studio Community Edition + `docplex`) was actually available while
-building this, so the class below has been run and validated end to end,
-not just written against documented API and left untested — see
-FORMULATION.md Appendix C.5 for the validated demo-instance result and an
-honest, unflattering medium-instance comparison against CP-SAT (more
-cases scheduled, but a noticeably worse objective/gap at the same time
-budget — almost certainly a search-tuning gap, not a modelling one; C.5
-explains why). It still falls back to the primary CP-SAT model (not the
-MILP) if `docplex` is not importable or the solve call fails for any
-reason (e.g. running this code on a machine with no CP Optimizer engine
-configured), printing setup instructions, so the rest of the demo keeps
-working without it — that fallback path is tested directly in
-tests/test_model.py regardless of whether the real engine is present.
+Falls back to the primary CP-SAT model if `docplex` isn't importable or
+the solve call fails for any reason (no engine configured, expired
+license, ...), printing setup instructions — so running this backend
+without a license doesn't break anything, it just quietly hands the
+instance to CP-SAT instead.
 
 Model
 -----
@@ -84,7 +70,7 @@ turnover lives in the transition, not the interval, a candidate's interval
 already equals the *surgeon's* own busy window too — this model needs only
 ONE interval size per candidate, where CP-SAT needs two (room: t_tot,
 surgeon: t_cir) precisely because CP-SAT bakes cleaning into the room
-interval's length. See FORMULATION.md Appendix C.3 for the full mapping.
+interval's length. See FORMULATION.md's appendix for the full mapping.
 """
 
 from __future__ import annotations
@@ -158,9 +144,8 @@ class CPOptimizerSolver(BaseSolver):
         # transition[i][j]: minimum gap between a service-i case ending and
         # a service-j case starting in the SAME room, immediately after it
         # in the chosen sequence. Diagonal = same-service turnover (shorter
-        # — same equipment setup); off-diagonal = full changeover. This is
-        # the structural answer to Appendix B.1's flat-t_clean critique —
-        # see module docstring point 2 and FORMULATION.md Appendix C.2.
+        # — same equipment setup); off-diagonal = full changeover. See
+        # module docstring point 2 and FORMULATION.md's appendix.
         transition_values = [
             [same if i == j else cross for j in range(n_svc)] for i in range(n_svc)
         ]
@@ -270,7 +255,7 @@ class CPOptimizerSolver(BaseSolver):
 
         # ── Objective: same shared w_c penalty, same three-term tardiness
         # shape as CP-SAT/MILP (penalty.py — no separate priority factor;
-        # see FORMULATION_CP.md §6.1) plus the bed-overflow term (C11) ───
+        # see FORMULATION_CP.md) plus the bed-overflow term (C11) ───
         objective_terms = []
         for c in cases:
             dtd = instance.days_to_deadline(c)
@@ -286,7 +271,7 @@ class CPOptimizerSolver(BaseSolver):
         # ── C11: downstream recovery/ICU beds — day-granularity interval
         # per case, channeled to whichever day its alternative landed on,
         # with the SAME overflow-penalty mechanism as CP-SAT (no silent
-        # horizon-boundary approximation — FORMULATION_CP.md §5.11) ──────
+        # horizon-boundary approximation — FORMULATION_CP.md) ──────
         n_days = len(days)
         overflow_penalty = int(round(instance.weekend_bed_overflow_penalty))
         beds_by_type: Dict[str, list] = defaultdict(list)

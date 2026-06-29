@@ -212,7 +212,7 @@ def _check_constraints(result: SolverResult, instance: PlanningInstance) -> None
 
     # Shared equipment — semantics depend on whether the solver reports
     # exact start/end times (CP-SAT: concurrent-units check) or only a
-    # day+room bucket (baseline MILP/greedy: daily-headcount check).
+    # day+room bucket (comparison MILP: daily-headcount check).
     if instance.has_equipment_limits():
         equip_ok = True
         has_times = any(a.start_min is not None for a in result.assignments)

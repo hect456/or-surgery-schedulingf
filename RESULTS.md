@@ -1,149 +1,97 @@
-# Results — What the Demo Produces, and Why It Validates §3's Choice
+# Results
 
-This is the "a few words explaining the results" deliverable. Full formulation in
-[FORMULATION.md](FORMULATION.md) / [FORMULATION_CP.md](FORMULATION_CP.md). Reproducible
-with `python main.py --instance {demo,medium} --benchmark` (CBC/Gurobi/Hexaly are run
-too, for the comparison below — none of them is the primary deliverable; see
-FORMULATION.md §12).
+What the demo actually produces, and why it backs up the CP-over-MILP argument in
+FORMULATION.md §3. Reproducible with `python main.py --instance {demo,medium}
+--benchmark`.
 
-**A note on these numbers vs. an earlier draft of this document:** the objective
-formula had two bugs (a priority/penalty double-counting and monotonicity inversion,
-and a surgeon-interval sizing issue) found and fixed during review — see
-[FORMULATION_CP.md §6](FORMULATION_CP.md) for the full derivation with worked numeric
-examples. Every number below is from the corrected code; objective values are **not**
-comparable to anything computed before the fix (the formula's scale changed).
-
-Environment: Windows, Python 3.12, `ortools` 9.15 (CBC bundled, CP-SAT), `gurobipy`
-12.0.2 available but optional. Hexaly: not installed/licensed here — falls back to CBC
-automatically, see [hexaly_solver.py](src/solvers/hexaly_solver.py). A note before the
-numbers: Gurobi's and CP-SAT's `Optimal` status both mean *"proven within the solver's
-configured relative gap"*, not literally a zero gap — the gap is always computed and
-shown below, never assumed.
+Environment: Windows, Python 3.12, `ortools` 9.x (CBC bundled, CP-SAT), `gurobipy`
+available locally (optional — falls back to CBC if missing), `docplex` + a CP Optimizer
+engine available locally (optional — falls back to CP-SAT if missing). A note before any
+numbers: every solver below reports "Optimal" once it's proven the result within its
+configured relative gap, which is shown explicitly and is not always a literal 0% —
+treat the gap column as part of the answer, not a footnote.
 
 ## Demo instance — 20 cases, 5 rooms, 6 surgeons
 
-`python main.py --instance demo --benchmark --gap 0.0001` (tight gap, to make the
-zero-gap verification airtight at this size):
+`python main.py --instance demo --benchmark --gap 0.0001`:
 
 | Solver | Status | Objective | Gap | Scheduled | Time |
 |---|---|---|---|---|---|
-| Greedy | Feasible | 163.0 | — | 20/20 | 0.000s |
-| **CP-SAT (primary model)** | **Optimal** | **155.0** | 0.00% | 20/20 | ~0.1s |
-| OR-Tools/CBC (alternative MILP) | Optimal | 157.0 | 0.00% | 20/20 | ~0.03s |
-| Gurobi (alternative MILP) | Optimal | 157.0 | 0.00% | 20/20 | ~0.06s |
-| Hexaly (→ CBC fallback, no license) | Optimal | 157.0 | 0.00% | 20/20 | ~0.02s |
+| **CP-SAT (primary model)** | Optimal | **155.0** | 0.00% | 20/20 | ~0.1s |
+| OR-Tools/CBC (comparison MILP) | Optimal | 157.0 | 0.00% | 20/20 | ~0.03s |
+| Gurobi (comparison MILP) | Optimal | 157.0 | 0.00% | 20/20 | ~0.6s |
+| CP Optimizer (appendix) | Optimal | 155.0 | 0.00% | 20/20 | ~1.1s |
 
-(These specific values are unchanged by the §6 bug fixes — this particular instance's
-optimal *value* happens not to move, even though, as noted below, the exact optimal
-*schedule* CP-SAT returns can vary run to run among ties.)
+Everything closes to a verified zero gap in well under two seconds at this size, so this
+instance is mostly a correctness check. One thing is still worth pulling out, because
+it's the §3 argument made concrete rather than asserted: the demo has one shared C-arm
+with capacity 1, used by four cases (C14, C15, C17, C19). The comparison MILP's C10
+counts *cases per day* against that capacity, so it spreads the four across four
+different days, one each. CP-SAT's `AddCumulative` checks literal time overlap instead,
+and its optimal schedule puts two of them — C15 and C17 — on the same day in sequence,
+never exceeding one concurrent use:
 
-Every solver closes to a *verified* zero gap in well under a second at this size, so
-this instance is mainly a correctness check. One thing is worth noting, because it's
-the whole argument for the primary model, made concrete:
+```
+CP-SAT  : Mon=[C19]  Tue=[C15, C17]  Wed=[C14]
+CBC     : Mon=[C19]  Tue=[C15]       Wed=[C17]   Thu=[C14]
+```
 
-**CP-SAT finds a better schedule (155 vs. 157), not because it searches harder, but
-because it models a shared resource correctly.** The demo has one shared C-arm with
-capacity 1. The MILP's C10 counts *cases per day* needing it ("capacity 1" reads as "at
-most one C-arm case per day, anywhere"). CP-SAT's `AddCumulative` checks *literal time
-overlap* instead. In the canonical run captured for `docs/img/demo_cp_sat.png`, CP-SAT's
-optimal schedule places **three** different C-arm cases on Monday (sequentially, in the
-same room, never exceeding 1 concurrent use) — a placement the MILP's day-count cap
-forbids outright (the MILP's own run, `docs/img/demo_baseline_milp.png`, spreads its
-four C-arm cases across four *different* days, one per day, exactly as its C10 forces).
+That placement is exactly what the MILP's day-count cap forbids by construction — not a
+worse search, a smaller feasible region. The 155 vs. 157 gap on the objective is the
+direct consequence.
 
-**Honesty about reproducibility:** which *exact* arrangement CP-SAT returns (which day,
-which room, sequential vs. across two rooms) can vary run to run among tied-optimal
-solutions — CP-SAT's parallel portfolio doesn't guarantee the same tie-break twice. What
-does **not** vary is the structural fact this demonstrates: any CP-SAT-optimal schedule
-that puts 2+ C-arm cases on the same day is something the MILP's day-count cap cannot
-express, by construction — the conclusion doesn't depend on which particular tied
-optimum was returned. This is FORMULATION.md §3's argument, observed directly rather
-than asserted.
+## Scaling — 200 cases, 12 rooms, 17 surgeons
 
-## Validating the choice at scale — 200 cases, 12 rooms, 17 surgeons
+**Step 1 — the comparison MILP's true optimum**, via Gurobi at a near-zero gap
+(`--solver milp-gurobi --gap 0.0005`): **74,074.0**, 130/200 scheduled, in well under a
+second. This is the number everything below is measured against.
 
-### Step 1: the *true* optimum of the alternative MILP
-
-`python main.py --instance medium --solver milp-gurobi --time-limit 300 --gap 0.0001`:
-
-| | Status | Objective | Gap | Scheduled | Time |
-|---|---|---|---|---|---|
-| Gurobi (near-zero gap) | **Optimal** | **74,305.0** | 0.01% | 130/200 | ~14s |
-
-This is the **proven, true optimum of the alternative MILP** on this instance — not a
-time-limited approximation. Everything below is measured against this number.
-
-### Step 2: a realistic 30-minute production budget, 1% gap target
-
-`python main.py --instance medium --solver {milp-cbc,cp-sat} --time-limit 1800 --gap
-0.01` (run independently per backend, in parallel, to avoid one competing with another
-for CPU):
+**Step 2 — a 2-minute budget, 1% gap target, CP-SAT vs. the open-source MILP backend**
+(`--time-limit 120 --gap 0.01`):
 
 | Solver | Status | Objective | Own Gap | vs. True MILP Optimum | Scheduled | Time |
 |---|---|---|---|---|---|---|
-| OR-Tools/CBC | Feasible | 74,383.0 | 0.13% | **+0.10%** | 130/200 | 1800.6s |
-| **CP-SAT/Interval** | Feasible | **66,471.0** | 1.31% | **−10.54%** | **133/200** | 1801.2s |
+| OR-Tools/CBC | Feasible | 74,116.0 | 0.56% | +0.06% | 130/200 | 120.2s |
+| **CP-SAT (primary model)** | Feasible | **69,956.0** | 6.62% | **−5.56%** | **131/200** | 124.5s |
 
-Reading this correctly:
+CBC essentially reaches the MILP's own true optimum in the 2-minute budget — Gurobi
+proves the same formulation's optimum over 100x faster, same math, different backend.
+CP-SAT doesn't just fail to beat that bound, it finds a genuinely different, better
+schedule below it while scheduling one more case, for the same reason as the demo
+instance's C-arm story at production scale: the MILP's day-level equipment cap and
+aggregate room/surgeon sums forbid schedules CP-SAT's exact `NoOverlap`/`Cumulative`
+constraints correctly allow. CP-SAT's own gap (6.62%) is looser than CBC's here, and
+that's not a contradiction — a smaller feasible region is mechanically easier to fully
+close, the way it's easier to prove there's no number above 5 in {1,…,5} than in
+{1,…,100}. The loose gap means there's likely still a better schedule than 69,956 left
+unfound at this budget, not that the search did badly.
 
-- **CBC essentially reaches the alternative MILP's true optimum** (74,383 vs. 74,305 —
-  0.10% off) but needs the full 30 minutes to get there; Gurobi proves the same
-  formulation's optimum in ~14 seconds — over **100x faster** to a verified answer, on
-  identical math, only the backend differs.
-- **CP-SAT does not just fail to beat the MILP's bound — it finds a legitimately
-  better, differently-structured schedule that is 10.54% *below* the MILP's true
-  optimum**, while scheduling **3 more cases** (133 vs. 130). This is the same
-  mechanism as the demo instance's C-arm story, at production scale: the MILP's
-  day-bucket equipment cap (C10) and its room/surgeon aggregate sums (C7/C8) structurally
-  forbid schedules CP-SAT's exact `NoOverlap`/`Cumulative` constraints correctly allow.
-  CP-SAT's own reported gap (1.31%) is relative to *its own* feasible region's bound —
-  not fully closed in 30 minutes either, meaning **even better schedules than 66,471
-  likely exist**.
-- **This is the concrete answer to "how would this scale to a real environment":** at a
-  30-minute batch-planning budget (a realistic cadence for a weekly OR plan), the
-  primary model is not merely "fast enough" — it is finding meaningfully better,
-  legitimately different schedules than the comparison MILP's mathematical optimum,
-  because it is solving a more faithful version of the actual resource-sharing problem,
-  now backed by a corrected, audited objective formula (FORMULATION_CP.md §6).
+This is a quick, honestly-labeled illustrative run, not the exhaustive proof a real
+capacity-planning decision would warrant — a production comparison would give each
+backend the planning team's actual cadence (a half-hour to overnight budget) and report
+variance across seeds, not a single 2-minute run.
 
-### Why the gap comparison (1.31% vs. 0.13%) doesn't favor CBC
+## CP Optimizer at scale
 
-A smaller feasible region is *easier* to fully close — the same way it's easier to prove
-there's no number larger than 5 in $\{1,\ldots,5\}$ than in $\{1,\ldots,100\}$. CBC's
-tighter own-gap is a property of how constrained its search space already is, not
-evidence its answer is better; CP-SAT's looser own-gap reflects a genuinely larger
-search space it hasn't fully exhausted in 30 minutes, not search inefficiency.
-
-## Optional, license-gated extension: Hexaly
-
-[`hexaly_solver.py`](src/solvers/hexaly_solver.py) is a real (non-stub) integration
-against Hexaly's local-search API, written as a set-partition formulation of the same
-problem. No academic license was available while building this, so every run above
-falls back to the alternative MILP automatically, with setup instructions printed at
-runtime. It is included as a pointed-at extension path for very large instances or
-real-time re-optimization (FORMULATION.md §14) — not benchmarked here, and not part of
-this deliverable's core claim.
+Not benchmarked at the medium-instance scale here — FORMULATION.md's appendix already
+reports an honest, unflattering comparison at 120 seconds (more cases scheduled than
+CP-SAT, but a markedly worse objective and a far looser gap, most likely because no
+custom search phase or warm start was applied to it). It stays an appendix backend, not
+a second deliverable, for that reason.
 
 ## Visual schedule
 
 `python main.py --instance <name> --solver cp-sat --plot out.png`
-(`src/utils/visualizer.py`). Per the case prompt, "a plain terminal output or a simple
-image of the schedule is plenty" — three are included in `docs/img/`, all regenerated
-against the corrected (post-§6-fix) code:
+(`src/utils/visualizer.py`). Each bar is one case; outlined bars are priority-4 (locked
+to day 1); colors are surgical service.
 
-- `demo_baseline_milp.png` — the alternative MILP's schedule: no exact clock times (it
-  doesn't model any, FORMULATION.md Appendix A), and its four C-arm cases spread one
-  per day across four different days, exactly as its day-count cap forces.
-- `demo_cp_sat.png` — the primary model's schedule, with real start/end times; three
-  C-arm cases land on Monday alone, sequentially — the placement the MILP's cap
-  forbids outright (see the demo-instance discussion above for the honest caveat about
-  run-to-run tie variance in exactly *which* arrangement appears).
-- `medium_cp_sat.png` — the 200-case instance, exact per-case timing across 12 rooms.
+**Demo instance, CP-SAT** — real start/end clock times; two C-arm cases land on Tuesday,
+sequentially in the same room:
 
-## Testing against real and literature data
+![Demo instance, CP-SAT](docs/img/demo_cp_sat.png)
 
-`literature_chln_instance()` is calibrated, not just inspired, to published CHLN
-waiting-list statistics (Marques & Captivo, 2015) — see FORMULATION.md §13 for the exact
-figures and an honest discussion of sampling variance, and for pointers to two public,
-real hospital OR-log datasets (Akbarzadeh & Maenhout, 2023) that are a structural fit
-for a follow-up pilot beyond this demo's scope.
+**Demo instance, comparison MILP** — same cases, no exact clock times (this formulation
+doesn't model any — cases within a room-day are laid out back-to-back for display only),
+and its four C-arm cases spread one per day across four different days:
+
+![Demo instance, comparison MILP](docs/img/demo_baseline_milp.png)

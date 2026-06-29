@@ -7,9 +7,9 @@ minimum needed for that: one bar per scheduled case, one row per room, one
 weekly timeline, colored by service.
 
 If the solver reported exact start/end times (CP-SAT), bars use them as-is.
-If not (baseline MILP/greedy, which only reason at day+room granularity),
+If not (the comparison MILP, which only reasons at day+room granularity),
 cases sharing a (day, room) slot are laid out back-to-back in case-id order
-purely for display — the baseline itself makes no claim about ordering.
+purely for display — the MILP itself makes no claim about ordering.
 """
 
 from __future__ import annotations

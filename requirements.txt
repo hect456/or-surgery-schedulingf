@@ -1,24 +1,17 @@
-# Core: OR-Tools provides both the MILP baseline (linear_solver, with CBC
-# and SCIP bundled in the wheel — no external solver binary needed) and the
-# interval-based CP-SAT production model (sat.python.cp_model).
+# Core: OR-Tools provides both CP-SAT (sat.python.cp_model, the primary model)
+# and the comparison MILP's CBC/SCIP backends (linear_solver) — no external
+# solver binary needed for any of that.
 ortools>=9.9
 
-# Core: Gantt-style schedule plot (--plot flag). The case prompt explicitly
-# allows "a simple image of the schedule" in lieu of a front end.
+# Core: Gantt-style schedule plot (--plot flag).
 matplotlib>=3.8
 
-# Optional: commercial backend for the baseline MILP (best performance at
-# scale). Requires a Gurobi licence; OR-Tools' MPSolver drives it directly.
+# Optional: commercial backends for the comparison MILP (src/solvers/milp_baseline_solver.py).
+# Gurobi needs a license; OR-Tools' MPSolver also recognizes CPLEX if your
+# OR-Tools build was linked against a licensed CPLEX install.
 # gurobipy
 
-# Optional: Hexaly local-search/hybrid backend (third point of the
-# trade-off comparison). Requires an academic licence — see
-# src/solvers/hexaly_solver.py for setup instructions.
-# hexaly
-
-# Optional: IBM ILOG CP Optimizer backend — a second CP engine, not a
-# re-skin of CP-SAT (sequence-dependent room turnover via a transition
-# matrix; see FORMULATION.md Appendix C). Requires a CP Optimizer engine
-# (local CPLEX Studio or DOcplexcloud) plus a licence — see
-# src/solvers/cp_optimizer_solver.py for setup instructions.
+# Optional: IBM ILOG CP Optimizer backend (src/solvers/cp_optimizer_solver.py,
+# FORMULATION.md Appendix B). Needs a CP Optimizer engine (local CPLEX Studio
+# or DOcplexcloud) plus a license — see that file's module docstring.
 # docplex

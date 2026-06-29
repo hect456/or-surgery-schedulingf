@@ -1,18 +1,17 @@
 """
-types.py — Core data structures for the Elective Surgery Scheduling problem.
+types.py — Core data structures for the elective surgery scheduling problem.
 
-Generic, hospital-agnostic data model. The priority + maximum-wait-time +
-penalty-multiplier mechanism below is not specific to any one institution —
-it mirrors how several public health systems prioritise elective waiting
-lists in practice (e.g. Portugal's SIGIC, the UK NHS Referral-to-Treatment
-targets, Canadian provincial wait-time benchmarks). We use that mechanism
-because it is evidence-based, not because this model targets any one of
-those systems — every numeric value below is an instance-level default,
-overridable per hospital (see PlanningInstance.max_wait_days /
-priority_multiplier).
+Plain dataclasses, no ORM and no solver imports, so the model is testable
+and readable on its own before any solver touches it.
 
-Design decision: plain dataclasses (no ORM, no external deps) so the model
-layer is solver-agnostic and testable in isolation.
+The priority tiers and their maximum waits (DEFAULT_MAX_WAIT_DAYS below)
+follow the same shape used by several public health systems to manage
+elective waiting lists — Portugal's SIGIC, the UK NHS's RTT targets,
+Canadian provincial wait-time benchmarks. All of them rank cases by
+clinical urgency and track how badly each tier's deadline gets missed,
+rather than running one undifferentiated FIFO queue. The actual numbers
+here are a reasonable starting point, not a hard requirement — every value
+is a PlanningInstance field a hospital can override with its own policy.
 """
 
 from __future__ import annotations
@@ -80,15 +79,11 @@ DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]   # D = {1..5}, one work week
 class Surgeon:
     """
     h ∈ H. A surgeon is identified by ID and constrained by daily/weekly
-    operative time limits (k_{hd}^{day} and k_h^{week} in the formulation).
-
-    k_{hd}^{day} is intentionally also bounded by room capacity in the
-    instances we build (min of "surgeon limit" and "max single-room
-    capacity that day"). The primary CP-SAT model (FORMULATION.md C8)
-    additionally adds an exact NoOverlap over the surgeon's intervals, so
-    a surgeon literally cannot be scheduled in two rooms at once, not just
-    within a daily-minutes budget; the alternative MILP formulation
-    (FORMULATION.md §12) only has the daily-minutes sum.
+    operative time limits (k_{hd}^{day} and k_h^{week} in FORMULATION.md).
+    Besides those two minute budgets, the solver also enforces an exact
+    NoOverlap over the surgeon's own time windows (C8) — the budgets alone
+    don't stop a surgeon from being double-booked across two rooms at the
+    same minute, they only cap total hours.
     """
     id: str
     name: str
@@ -121,7 +116,11 @@ class SurgicalCase:
 
     Key time parameters:
       t_cir   = operative time (surgeon + room occupied)
-      t_clean = cleaning/turnover time after the case
+      t_clean = room turnover/cleaning time after the case — instances.py
+                sets this from procedure length rather than a flat constant
+                (longer cases tend to need a longer reset and instrument
+                changeover); the field itself is just a plain number, the
+                solver doesn't care how it was derived
       t_tot   = t_cir + t_clean  (total room occupation time)
 
     Optional resources (see PlanningInstance for capacities):
@@ -204,27 +203,20 @@ class PlanningInstance:
 
     alpha: float = 2.0                 # α > 1: urgency multiplier for overdue cases
 
-    # Recovery/ICU bed capacity (bed_capacity above) is modeled as constant
-    # across the week (FORMULATION_CP.md C11). A bed stay starting late in
-    # the horizon (e.g. Friday, 2-day length of stay) can extend past the
-    # modeled week — into what would be a weekend, typically lower-staffed
-    # in real hospitals, a regime this constant-capacity model does not
-    # represent. Rather than silently ignore that, every day of a stay
-    # falling on/after the horizon's last day is charged this penalty in
-    # the objective (0 = no penalty, i.e. the old, silent behaviour). This
-    # is an explicit POLICY KNOB, not a literature-derived constant — see
-    # FORMULATION.md's parameter-justification appendix.
+    # Bed capacity is constant across the week. A stay starting late in the
+    # horizon (e.g. Friday, 2-day length of stay) can run past the modeled
+    # week into what would be the weekend, which typically runs on a
+    # reduced staff roster in real hospitals. Instead of silently ignoring
+    # that or forbidding it outright, every day of a stay past the horizon
+    # is charged this penalty in the objective (0 disables it). This is a
+    # policy knob a hospital sets, not a value derived from any source.
     weekend_bed_overflow_penalty: float = 50.0
 
-    # Sequence-dependent room turnover, used ONLY by the optional CP
-    # Optimizer backend (src/solvers/cp_optimizer_solver.py, FORMULATION.md
-    # Appendix C) to demonstrate a structurally different way to capture
-    # what FORMULATION.md Appendix B.1 already flags as the model's
-    # least-grounded constant: a flat t_clean for every case, when real OR
-    # turnover (15-60 min) actually depends on what precedes/follows, not
-    # just on the case itself. The primary CP-SAT model and the comparison
-    # MILP are UNCHANGED by these fields — both still use SurgicalCase.
-    # t_clean exactly as before; nothing here alters their behaviour.
+    # Sequence-dependent room turnover. Only the optional CP Optimizer
+    # backend (src/solvers/cp_optimizer_solver.py) uses these — it charges
+    # turnover as a cost between whichever two cases land next to each
+    # other in a room, rather than baking a flat t_clean into every case.
+    # The primary CP-SAT model ignores both fields.
     same_service_turnover_min: int = 15    # back-to-back cases, same service
     cross_service_turnover_min: int = 35   # service switch — full changeover
 

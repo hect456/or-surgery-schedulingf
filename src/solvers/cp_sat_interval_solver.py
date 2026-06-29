@@ -1,27 +1,20 @@
 """
-cp_sat_interval_solver.py — Interval-Based Constraint Programming model,
-solved with Google OR-Tools CP-SAT. This is the PRIMARY formulation —
-see FORMULATION.md §3 for why CP, not MILP, and FORMULATION_CP.md for the
-full variables/objective/constraints (C1-C11) math, including the two
-corrections documented in FORMULATION_CP.md §6 (priority/penalty-curve
-double-counting; surgeon vs. room interval size). Every constraint below
-carries the same C-number as FORMULATION_CP.md, so the two can be read
-side by side.
+cp_sat_interval_solver.py — the model this project is built around: an
+interval-based constraint program, solved with Google OR-Tools CP-SAT.
+FORMULATION.md has the reasoning behind picking CP over a MILP for this
+problem; FORMULATION_CP.md has the full variables/objective/constraints
+math (C1-C11). Constraint numbers in the comments below match that
+document, so the two can be read side by side.
 
-Why interval-based CP-SAT (FORMULATION.md §3, condensed)?
------------------------------------------------------------
-A linear capacity-sum constraint ("total minutes used this day <= k") only
-certifies that a set of durations *fits*; it does not certify they can be
-placed *without colliding*, and the two are not equivalent once a resource
-is shared across rooms (a surgeon working two rooms, a shared imaging
-unit). CP-SAT's interval variables (start, size, end, optional presence)
-plus AddNoOverlap / AddCumulative are the textbook tool for this class of
-problem (job-shop / RCPSP-family disjunctive scheduling): exact,
-branch-and-bound-free disjunctive reasoning via specialised global-constraint
-propagation (Vilim 2004 for NoOverlap; Schutt et al. 2009 for Cumulative),
-not a bigger/slower MILP. See FORMULATION.md §3 for the full argument and
-§12 for the alternative MILP formulation (milp_baseline_solver.py) kept
-purely as the empirical comparison point that justifies this choice.
+The short version of why CP-SAT and not a MILP: a linear capacity-sum
+constraint ("total minutes used today <= room capacity") only checks that
+a set of durations fits a day — it doesn't check that they can be placed
+without colliding, and those are different statements once a resource is
+shared across more than one room (a surgeon covering two rooms, a shared
+imaging unit). CP-SAT's interval variables (start, size, end, optional
+presence) plus AddNoOverlap / AddCumulative check actual time overlap
+directly, which is what this problem is — a disjunctive resource-scheduling
+problem, the textbook use case for those constraints.
 """
 
 from __future__ import annotations
@@ -34,16 +27,15 @@ from ortools.sat.python import cp_model
 from ..model.types import PlanningInstance, Assignment, SolverResult, Priority
 from ..model.penalty import compute_all_penalties
 from .base_solver import BaseSolver
-from .warm_start import greedy_warm_start
 
 
 class CPSATIntervalSolver(BaseSolver):
     """
-    Interval-based CP-SAT production model.
+    Interval-based CP-SAT model — the primary solver for this project.
 
-    Variables (per feasible case/day/room slot, same eligibility filter as
-    the baseline: room-service match, ambulatory-only, pediatric block,
-    surgeon availability):
+    Variables (per feasible case/day/room slot — room-service match,
+    ambulatory-only, pediatric block, surgeon availability already
+    filtered out):
       presence[c,d,r]        : bool — case c assigned to (d, r)
       start[c,d,r]           : int  — start time in minutes from room opening
       end[c,d,r]             : int  — room-end (= start + t_tot when present)
@@ -65,9 +57,8 @@ class CPSATIntervalSolver(BaseSolver):
     name = "CP-SAT/Interval"
 
     def __init__(self, time_limit_sec: int = 120, mip_gap: float = 0.01,
-                 warm_start: bool = True, log_search_progress: bool = False):
+                 log_search_progress: bool = False):
         super().__init__(time_limit_sec, mip_gap)
-        self.warm_start = warm_start                 # seed search with the greedy assignment
         self.log_search_progress = log_search_progress
 
     def _build_and_solve(self, instance: PlanningInstance) -> SolverResult:
@@ -105,12 +96,11 @@ class CPSATIntervalSolver(BaseSolver):
         #                             (operative time + cleaning/turnover)
         #   surgeon_interval[key]  : [start, start + t_cir)  — surgeon's own
         #                             time in the case (no cleaning)
-        # Reusing the t_tot-sized interval for the surgeon's NoOverlap too
-        # (an earlier version did this) silently forbids a real, legitimate
-        # schedule: the surgeon scrubbing into a *different* room while
-        # this room is still being cleaned by nursing/support staff. Only
-        # the room itself needs to stay blocked for t_tot; the surgeon is
-        # free again after t_cir. See FORMULATION_CP.md C8 for the math.
+        # The room needs to stay blocked for t_tot, but the surgeon is free
+        # again as soon as t_cir ends — they can scrub into a different room
+        # while this one is still being cleaned by nursing/support staff. If
+        # both NoOverlap constraints used the same t_tot-sized interval, that
+        # move would be wrongly forbidden. See FORMULATION_CP.md C8.
         presence: Dict[Tuple[str, str, str], object] = {}
         start: Dict[Tuple[str, str, str], object] = {}
         end: Dict[Tuple[str, str, str], object] = {}
@@ -203,7 +193,8 @@ class CPSATIntervalSolver(BaseSolver):
                 if terms:
                     model.Add(sum(terms) <= s.daily_limit_min)
 
-        # ── C9: surgeon weekly time limit (unchanged from baseline) ──────
+        # ── C9: surgeon weekly time limit (a separate minute budget — the
+        # NoOverlap above stops double-booking, this caps total hours) ───
         for s in instance.surgeons:
             terms = [case_map[cid].t_cir * presence[(cid, d, rid)]
                      for (cid, d, rid) in candidates if case_map[cid].surgeon_id == s.id]
@@ -239,47 +230,30 @@ class CPSATIntervalSolver(BaseSolver):
                     objective_terms.append(int(round(coeff)) * presence[key])
         for cid, u in unscheduled.items():
             # penalties[cid] already includes the priority multiplier
-            # (penalty.py) — do not multiply by priority.value again here
-            # (that was a double-counting bug; see penalty.py docstring).
+            # (penalty.py) — don't multiply by priority again here.
             objective_terms.append(int(round(penalties[cid])) * u)
 
         # ── C11: downstream recovery/ICU bed AddCumulative ───────────────
         # Day-granularity resource: a case occupies a bed from its surgery
-        # day for `recovery_los_days` days. Not expressible in the
-        # alternative day-bucket MILP (FORMULATION.md §12) — needs an
-        # interval representation to even state correctly. Also appends
-        # the weekend-overflow penalty (see PlanningInstance docstring) to
-        # objective_terms for any stay extending past the horizon.
+        # day for `recovery_los_days` days. Needs an interval representation
+        # to state at all — a day-bucket model has no variable that means
+        # "the day this case happens", only a fixed index a binary is
+        # attached to. Also appends the weekend-overflow penalty (see
+        # PlanningInstance docstring) for any stay extending past the
+        # horizon.
         if instance.has_bed_limits():
             self._add_recovery_bed_constraints(
                 model, instance, candidates, presence, is_scheduled, objective_terms
             )
         model.Minimize(sum(objective_terms))
 
-        # ── Warm start: seed CP-SAT's portfolio search with the greedy
-        # heuristic's (day, room) assignment. Only the discrete `presence`
-        # and `unscheduled` decisions are hinted, not exact start times —
-        # see warm_start.py for why. This is standard production practice
-        # once an instance is large enough that "first incumbent" matters;
-        # CP-SAT treats AddHint as a bias, not a hard constraint, so an
-        # inconsistent or partial hint never risks correctness.
-        if self.warm_start:
-            assigned, unsched = greedy_warm_start(instance)
-            for key, var in presence.items():
-                cid, d, rid = key
-                model.AddHint(var, 1 if assigned.get(cid) == (d, rid) else 0)
-            for cid, u in unscheduled.items():
-                model.AddHint(u, 1 if cid in unsched else 0)
-
         # ── Solve ─────────────────────────────────────────────────────────
-        # num_search_workers: CP-SAT's parallel portfolio (LNS + multiple
-        # complete-search strategies) is the actual state-of-the-art engine
-        # here — we deliberately do NOT hand-write a custom decision
-        # strategy on top of it; OR-Tools' own guidance is that the default
-        # portfolio outperforms manual search hints absent deep structural
-        # knowledge the model doesn't have. Capped at the machine's core
-        # count (here: 8) since oversubscribing workers past physical cores
-        # only adds contention, not search diversity.
+        # CP-SAT's default parallel portfolio (several complete-search
+        # workers plus large-neighbourhood-search workers improving an
+        # incumbent, sharing learned clauses) is the actual search engine
+        # here — there's no hand-written branching strategy on top of it.
+        # Capped at the machine's core count since oversubscribing workers
+        # past physical cores adds contention, not search diversity.
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.time_limit_sec)
         solver.parameters.relative_gap_limit = self.mip_gap
@@ -314,11 +288,8 @@ class CPSATIntervalSolver(BaseSolver):
 
         # Always compute the gap, even when status == OPTIMAL: with
         # relative_gap_limit set (here: self.mip_gap), CP-SAT's OPTIMAL means
-        # "proven within that tolerance," exactly like Gurobi's default
-        # termination rule — NOT necessarily a literal zero gap. Reporting
-        # this honestly (rather than assuming OPTIMAL implies 0%) is the
-        # only way to catch cases like a warm start changing which
-        # within-tolerance incumbent gets accepted first.
+        # "proven within that tolerance," not necessarily a literal 0%, so
+        # the actual number is worth reporting rather than assumed.
         gap = None
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             try:

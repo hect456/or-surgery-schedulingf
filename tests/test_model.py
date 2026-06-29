@@ -1,23 +1,19 @@
 """
-tests/test_model.py — Unit tests for the surgery scheduling models.
+tests/test_model.py — tests for the surgery scheduling models.
 
 Covers:
-1. Primary CP-SAT interval-based model — hard constraints C1-C11, including
-   the exact no-overlap / cumulative checks the alternative MILP can't
-   express (FORMULATION.md §9).
-2. Alternative MILP (OR-Tools/CBC, FORMULATION.md §12) constraint
-   correctness on the demo instance — the comparison point, not a parallel
-   acceptance target.
-3. Greedy heuristic feasibility (used for warm-starting both solvers).
-4. Cross-validation: MILP and CP-SAT agree the demo instance is solvable
-   and both respect every shared hard constraint (the acceptance contract
-   referenced in FORMULATION.md).
-5. The medium and literature-calibrated instances stay feasible at scale.
-6. CP Optimizer (FORMULATION.md Appendix C) — adapts to whichever path
-   actually runs on this machine: if docplex + a CP Optimizer engine are
-   available, validates the real sequence-dependent-turnover semantics;
-   otherwise validates the fallback to CP-SAT. The fallback mechanism
-   itself is also tested directly, so it stays covered either way.
+1. The primary CP-SAT model — hard constraints C1-C11, including the exact
+   no-overlap / cumulative checks the comparison MILP can't express.
+2. The comparison MILP (OR-Tools/CBC) on the demo instance — checked
+   because it's the empirical evidence for choosing CP-SAT, not because
+   it's a second deliverable.
+3. Cross-validation: MILP and CP-SAT agree the demo instance is fully
+   schedulable and both respect every shared hard constraint.
+4. The medium instance stays feasible at ~200 cases.
+5. CP Optimizer — adapts to whichever path actually runs on this machine:
+   if docplex + a CP Optimizer engine are available, validates the real
+   sequence-dependent-turnover semantics; otherwise validates the fallback
+   to CP-SAT. The fallback path itself is also tested directly.
 """
 
 import sys, os
@@ -25,12 +21,10 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.data.instances import demo_instance, medium_instance, literature_chln_instance
+from src.data.instances import demo_instance, medium_instance
 from src.solvers.milp_baseline_solver import MILPBaselineSolver
 from src.solvers.cp_sat_interval_solver import CPSATIntervalSolver
-from src.solvers.greedy_solver import GreedySolver
 from src.solvers.cp_optimizer_solver import CPOptimizerSolver
-from src.model.types import Priority
 
 
 def _assert_hard_constraints(inst, result):
@@ -104,7 +98,7 @@ def _assert_hard_constraints(inst, result):
                     max_running = max(max_running, running)
                 assert max_running <= cap, f"Equipment {e} on {d}: {max_running} concurrent > {cap}"
         else:
-            # Day-bucket model (baseline MILP/greedy): capacity is a daily headcount.
+            # Day-bucket model (comparison MILP): capacity is a daily headcount.
             equip_load = defaultdict(int)
             for a in result.assignments:
                 c = case_map[a.case_id]
@@ -151,26 +145,15 @@ def test_milp_and_cp_sat_agree_demo_is_fully_schedulable():
     assert len(cp_result.unscheduled_case_ids) == 0
 
 
-def test_greedy_feasible():
-    inst   = demo_instance()
-    solver = GreedySolver()
-    result = solver.solve(inst)
-    assert result.is_optimal(), f"Greedy failed: {result.status}"
-    scheduled_ids = {a.case_id for a in result.assignments}
-    for c in inst.cases:
-        if c.priority == Priority.EMERGENT_ADDON:
-            assert c.id in scheduled_ids, f"Greedy: priority-4 case {c.id} not scheduled"
-
-
 def _assert_cp_optimizer_constraints(inst, result):
     """Hard-constraint check specific to CPOptimizerSolver's own semantics
-    (FORMULATION.md Appendix C): room intervals are sized t_cir only, and
+    (FORMULATION.md Appendix B): room intervals are sized t_cir only, and
     turnover is a SEQUENCE-DEPENDENT transition cost, not a flat t_clean
     baked into each interval — so the generic _assert_hard_constraints
     (which sums t_tot per room-day, a CP-SAT/MILP-specific assumption)
     does not apply here. This checks the actual binding constraint: the
     real gap between consecutive room cases must be at least the
-    same-/cross-service turnover minimum from C.2/C.3."""
+    same-/cross-service turnover minimum from FORMULATION.md Appendix B.1."""
     case_map = inst.cases_by_id
     sched = {a.case_id: a for a in result.assignments}
 
@@ -226,7 +209,7 @@ def _assert_cp_optimizer_constraints(inst, result):
 
 
 def test_cp_optimizer_solver():
-    """CPOptimizerSolver (FORMULATION.md Appendix C) requires a docplex
+    """CPOptimizerSolver (FORMULATION.md Appendix B) requires a docplex
     install plus a CP Optimizer engine (local CPLEX Studio or
     DOcplexcloud) — not guaranteed on every machine this suite runs on.
     Whichever path actually executes here, it must produce a feasible,
@@ -266,27 +249,14 @@ def test_medium_instance_feasible():
     _assert_hard_constraints(inst, result)
 
 
-def test_literature_chln_instance_feasible():
-    """The instance calibrated to published real CHLN waiting-list statistics
-    (Marques & Captivo, 2015) must stay solvable despite the priority-4
-    deconfliction repair pass (_resolve_priority4_conflicts)."""
-    inst   = literature_chln_instance(seed=7, n_cases=80)
-    solver = MILPBaselineSolver(backend="CBC", time_limit_sec=60, mip_gap=0.05)
-    result = solver.solve(inst)
-    assert result.is_optimal(), f"Literature CHLN instance: {result.status}"
-    _assert_hard_constraints(inst, result)
-
-
 if __name__ == "__main__":
     tests = [
         test_demo_milp_solves_to_optimal,
         test_demo_cp_sat_feasible,
         test_milp_and_cp_sat_agree_demo_is_fully_schedulable,
-        test_greedy_feasible,
         test_cp_optimizer_solver,
         test_cp_optimizer_fallback_method_is_correct,
         test_medium_instance_feasible,
-        test_literature_chln_instance_feasible,
     ]
     passed = 0
     failed = 0
