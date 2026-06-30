@@ -116,12 +116,19 @@ class CPSATIntervalSolver(BaseSolver):
             cap = room_caps[rid].get(d, 0)
             key = (cid, d, rid)
             presence[key] = model.NewBoolVar(f"pr_{cid}_{d}_{rid}")
-            start[key] = model.NewIntVar(0, max(cap, 0), f"st_{cid}_{d}_{rid}")
-            end[key] = model.NewIntVar(0, max(cap, 0), f"en_{cid}_{d}_{rid}")
+            # Tighter upper bounds: start can be at most cap - t_tot (otherwise
+            # the case would overflow the room's open time even if it starts alone).
+            # CP-SAT would eventually infer this through interval propagation, but
+            # providing it upfront reduces the initial domain and speeds up pruning.
+            start_ub = max(0, cap - c.t_tot)
+            end_ub = max(c.t_tot, cap)   # end = start + t_tot ≤ cap (tight)
+            surg_end_ub = max(c.t_cir, cap)
+            start[key] = model.NewIntVar(0, start_ub, f"st_{cid}_{d}_{rid}")
+            end[key] = model.NewIntVar(c.t_tot, end_ub, f"en_{cid}_{d}_{rid}")
             interval[key] = model.NewOptionalIntervalVar(
                 start[key], c.t_tot, end[key], presence[key], f"iv_{cid}_{d}_{rid}"
             )
-            surgeon_end[key] = model.NewIntVar(0, max(cap, 0), f"sgend_{cid}_{d}_{rid}")
+            surgeon_end[key] = model.NewIntVar(c.t_cir, surg_end_ub, f"sgend_{cid}_{d}_{rid}")
             surgeon_interval[key] = model.NewOptionalIntervalVar(
                 start[key], c.t_cir, surgeon_end[key], presence[key], f"sgiv_{cid}_{d}_{rid}"
             )
@@ -250,6 +257,15 @@ class CPSATIntervalSolver(BaseSolver):
             )
         model.Minimize(sum(objective_terms))
 
+        # ── Greedy warm-start hints ───────────────────────────────────────
+        # Provide CP-SAT with a first-fit greedy assignment as search hints.
+        # Hints are advisory: the solver ignores any that lead to conflict.
+        # Even a rough hint improves the first incumbent significantly, which
+        # lets the gap close faster within a fixed time budget.
+        self._apply_greedy_hints(
+            model, instance, candidates, presence, start, unscheduled, room_caps
+        )
+
         # ── Solve ─────────────────────────────────────────────────────────
         # CP-SAT's default parallel portfolio (several complete-search
         # workers plus large-neighbourhood-search workers improving an
@@ -260,11 +276,14 @@ class CPSATIntervalSolver(BaseSolver):
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.time_limit_sec)
         solver.parameters.relative_gap_limit = self.mip_gap
-        # Use all available logical cores, capped at 16 — beyond that,
-        # CP-SAT's clause-sharing overhead tends to outweigh the added
-        # search diversity on instances of this size. The cap at 8 in the
-        # previous version was too conservative on 10-16 core machines.
+        # Workers capped at 16 — beyond that, clause-sharing overhead outweighs
+        # added search diversity on instances of this size.
         solver.parameters.num_search_workers = min(16, os.cpu_count() or 4)
+        # linearization_level = 2: enables stronger LP relaxation cuts, which
+        # tighten the lower bound faster and close the gap more aggressively.
+        # Default is 1; increasing to 2 costs more per iteration but pays off
+        # on medium-to-large instances where bound quality matters most.
+        solver.parameters.linearization_level = 2
         solver.parameters.log_search_progress = self.log_search_progress
         status = solver.Solve(model)
 
@@ -372,3 +391,56 @@ class CPSATIntervalSolver(BaseSolver):
                 continue
             capacity = min(caps)  # constant-capacity assumption (see module docstring)
             model.AddCumulative(ivs, [1] * len(ivs), capacity)
+
+    @staticmethod
+    def _apply_greedy_hints(model, instance, candidates, presence, start,
+                            unscheduled, room_caps):
+        """
+        Build a fast first-fit greedy assignment and provide it to CP-SAT
+        as search hints via model.AddHint().
+
+        The greedy packs cases into the first room-day slot with enough
+        remaining capacity, processing cases in urgency order (P4 first,
+        then by days_to_deadline ascending so the most overdue come first).
+        Surgeon non-overlap is NOT checked — the hint may contain surgeon
+        conflicts. CP-SAT silently ignores any infeasible hint values and
+        uses the rest as a warm start. Even a partial, imperfect hint
+        dramatically improves the quality of the first incumbent.
+        """
+        # Sort: EMERGENT_ADDON first, then most overdue, then most urgent tier
+        sorted_cases = sorted(
+            instance.cases,
+            key=lambda c: (-c.priority.value, instance.days_to_deadline(c)),
+        )
+
+        # next_min[(room_id, day)] = minutes already committed in that slot
+        next_min: Dict[Tuple[str, str], int] = defaultdict(int)
+        placed: set = set()
+        pr_hint: Dict[Tuple[str, str, str], int] = {}
+        st_hint: Dict[Tuple[str, str, str], int] = {}
+
+        for c in sorted_cases:
+            case_cands = sorted(
+                [(d, rid) for (cid, d, rid) in candidates if cid == c.id],
+                key=lambda t: t[0],   # try earlier days first
+            )
+            for d, rid in case_cands:
+                cap = room_caps[rid].get(d, 0)
+                used = next_min[rid, d]
+                if used + c.t_tot <= cap:
+                    pr_hint[c.id, d, rid] = 1
+                    st_hint[c.id, d, rid] = used
+                    next_min[rid, d] = used + c.t_tot
+                    placed.add(c.id)
+                    break
+
+        # Apply hints to the model
+        for (cid, d, rid) in candidates:
+            k = (cid, d, rid)
+            model.AddHint(presence[k], pr_hint.get(k, 0))
+            if k in st_hint:
+                model.AddHint(start[k], st_hint[k])
+
+        # Hint unscheduled flags
+        for cid, u in unscheduled.items():
+            model.AddHint(u, 0 if cid in placed else 1)
