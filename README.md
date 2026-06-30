@@ -147,7 +147,21 @@ CP-SAT wins both, not by searching harder, but by checking actual time overlap o
 shared equipment instead of a daily headcount — RESULTS.md walks through exactly which
 cases land where and why the comparison MILP can't reach that schedule at all.
 
+**Demo instance — CP-SAT schedule (20 cases, 5 rooms):**
+
 ![Demo instance, CP-SAT](docs/img/demo_cp_sat.png)
+
+**Demo instance — MILP baseline schedule (same 20 cases, no clock times):**
+
+![Demo instance, MIP baseline](docs/img/demo_baseline_milp.png)
+
+**Medium instance — CP-SAT schedule (131/200 cases scheduled, 12 rooms):**
+
+![Medium instance, CP-SAT](docs/img/medium_cp_sat.png)
+
+**Medium instance — MILP baseline schedule (129/200 cases, 2-minute budget):**
+
+![Medium instance, MIP baseline](docs/img/medium_baseline_milp.png)
 
 ---
 
