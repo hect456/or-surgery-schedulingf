@@ -165,6 +165,64 @@ cases land where and why the comparison MILP can't reach that schedule at all.
 
 ---
 
+## Conclusions
+
+What the experiments on the two tested instances show, stated plainly:
+
+1. **CP-SAT finds strictly better schedules on both instances.** On the demo (20 cases)
+   it reaches objective **155.0** vs. the MILP's proven optimum of 157.0. On the medium
+   instance (200 cases, 2-minute budget) it reaches **69,956** vs. the MILP's
+   independently-verified true optimum of 74,074 — that's a **5.56% improvement below
+   the MILP's own proven lower bound**, while scheduling one additional case (131 vs.
+   130). The cause is always the same: CP-SAT searches a strictly larger, correct
+   feasible region.
+
+2. **The gap metric does not mean what it appears to mean without context.**
+   CP-SAT's reported 6.62% gap and CBC's 0.56% gap are each measured against their
+   *own* feasible-region bound — and those bounds are different because the feasible
+   regions themselves are different. A smaller feasible region is mechanically easier to
+   close a gap on, the way it is easier to prove there is no number above 5 in {1,…,5}
+   than in {1,…,100}. Comparing the gaps head-to-head implies they are on the same
+   scale; they are not. The correct comparison is the absolute objective value, where
+   CP-SAT wins by a wide margin.
+
+3. **Shared-equipment modelling is the decisive structural difference.**
+   The MILP's C10 counts how many equipment-requiring cases fall on a given day and
+   checks that count against capacity. CP-SAT's `AddCumulative` checks whether any two
+   of those cases actually *overlap in clock time*. For the demo's shared C-arm: the
+   MILP spreads four C-arm cases across four separate days (one per day, forced);
+   CP-SAT places two of them on the same Tuesday in sequence, correctly identifying they
+   never run concurrently. The day-count constraint does not forbid an illegal schedule
+   — it forbids a legal one.
+
+4. **C11 (recovery/ICU beds) is a structural argument for interval-based CP that holds
+   independent of performance.** The constraint "a bed stay starts on the day of
+   surgery and runs for `los_c` days" requires a variable that holds "day of surgery" as
+   a concrete value. A day-bucket MILP has no such variable — only a fixed index a
+   binary decision is attached to. C11 simply cannot be expressed in that formulation.
+   Even if the MILP matched CP-SAT on every other metric, the bed constraint alone
+   justifies the interval-based model.
+
+5. **The two-interval design reflects real operating-room practice.** Each candidate
+   slot gets a room interval (size `t_op + t_clean`, for the room's occupancy) and a
+   shorter surgeon interval (size `t_op` only, for the surgeon's time). Both share the
+   same start. This means a surgeon who finishes at time `t` can immediately move to a
+   second room while the first room is still being cleaned — correctly modelled, not
+   accidentally forbidden. A single `t_tot`-sized interval for C8 would wrongly block
+   the surgeon through the cleaning period in every room simultaneously.
+
+6. **The demo instance solves to proven zero-gap optimality in approximately 0.1 seconds.**
+   This is entirely practical for interactive decision support — a planner can try
+   different priority weights or capacity assumptions and see the result in real time,
+   rather than waiting for a batch run.
+
+7. **At a two-minute budget, CP-SAT already dominates the open-source MILP backend on
+   every measure that matters** — objective value, cases scheduled, and feasible-region
+   correctness. Extending the budget further would not change the structural argument;
+   the MILP's feasible region does not grow with more time.
+
+---
+
 ## Open questions
 
 **Passing this off to a developer.** FORMULATION.md §13 has the full answer; short
