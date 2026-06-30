@@ -13,7 +13,7 @@
 \usepackage{grffile}
 \usepackage{xcolor}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta,shapes,positioning}
+\usetikzlibrary{arrows.meta,shapes,positioning,calc}
 
 \usetheme{Berlin}
 \usecolortheme{seahorse}
@@ -608,43 +608,48 @@
 
 \begin{frame}{CP-SAT integration pipeline}
   \centering
+  % node width 1.75cm + gap 0.26cm  =>  5*1.75 + 4*0.26 = 9.79 cm total -- fits slide
   \begin{tikzpicture}[
-    node distance=0.28cm and 0.42cm,
-    proc/.style={draw, rectangle, rounded corners=2pt,
-                 fill=blue!10, align=center, font=\tiny,
-                 minimum width=2.55cm, minimum height=0.62cm},
-    ionode/.style={draw, rectangle, rounded corners=2pt,
-               fill=green!15, align=center, font=\tiny,
-               minimum width=2.55cm, minimum height=0.62cm},
-    solvenode/.style={draw, rectangle, rounded corners=2pt,
-                 fill=orange!18, align=center, font=\tiny,
-                 minimum width=2.55cm, minimum height=0.62cm},
-    outnode/.style={draw, rectangle, rounded corners=2pt,
-                fill=teal!18, align=center, font=\tiny,
-                minimum width=2.55cm, minimum height=0.62cm},
-    arr/.style={-{Stealth[length=3pt,width=2pt]}, thick},
-    backloop/.style={-{Stealth[length=3pt,width=2pt]}, thick, dashed, red!60!black},
+    node distance=0.22cm and 0.26cm,
+    base/.style={draw, rectangle, rounded corners=3pt,
+                 align=center, font=\tiny,
+                 minimum width=1.75cm, minimum height=0.68cm,
+                 text width=1.65cm},
+    proc/.style={base, fill=blue!12},
+    ionode/.style={base, fill=green!18},
+    solvenode/.style={base, fill=orange!22},
+    outnode/.style={base, fill=teal!20},
+    arr/.style={-{Stealth[length=4pt,width=3pt]}, semithick},
+    backloop/.style={-{Stealth[length=4pt,width=3pt]}, semithick, dashed,
+                     red!65!black},
   ]
-    \node[ionode]  (A) {Hospital data\\EHR / PAS};
+    % ---- Row 1: left to right ----
+    \node[ionode]  (A) {Hospital data\\(EHR / PAS)};
     \node[proc, right=of A] (B) {Build\\PlanningInstance};
     \node[proc, right=of B] (C) {Compute $dd_c$, $w_c$\\priority \& penalty};
     \node[proc, right=of C] (D) {Pre-filter C4--C6\\eligible $(c,d,r)$};
-    \node[proc, right=of D] (E) {Create variables\\$\text{pr}$, $\text{start}$, $\text{iv}$,\\$\text{sgiv}$, $u_c$, $\text{bed}_c$};
+    \node[proc, right=of D] (E) {Create variables\\pr, start, iv,\\sgiv, $u_c$, bed};
 
-    \node[proc, below=0.75cm of E] (F) {Add C1--C11\\NoOverlap, Cumulative,\\sum caps, overflow};
-    \node[proc, left=of F] (G) {Set 4-term\\objective};
-    \node[solvenode, left=of G] (H) {CP-SAT solve\\parallel portfolio\\gap $\le1\%$ / time};
-    \node[proc, left=of H] (I) {Extract assignments\\+ unscheduled};
-    \node[outnode, left=of I] (J) {Verify C1--C11\\+ output Gantt};
+    % ---- Row 2: right to left ----
+    \node[proc,     below=0.85cm of E] (F) {Add C1--C11\\NoOverlap,\\Cumulative, caps};
+    \node[proc,      left=of F]        (G) {Set 4-term\\objective};
+    \node[solvenode, left=of G]        (H) {CP-SAT solve\\portfolio paralelo\\gap $\le1\%$};
+    \node[proc,      left=of H]        (I) {Extract\\assignments};
+    \node[outnode,   left=of I]        (J) {Verify C1--C11\\output Gantt};
 
+    % ---- Row 1 arrows ----
     \draw[arr] (A)--(B); \draw[arr] (B)--(C);
     \draw[arr] (C)--(D); \draw[arr] (D)--(E);
+    % ---- Connector between rows ----
     \draw[arr] (E)--(F);
+    % ---- Row 2 arrows ----
     \draw[arr] (F)--(G); \draw[arr] (G)--(H);
     \draw[arr] (H)--(I); \draw[arr] (I)--(J);
-    \draw[backloop] (H.north) -- ++(0,0.35) --
-      node[above,font=\tiny,text=black]{continues internally}
-      ++(-2.6cm,0) -- (G.north);
+    % ---- Re-solve loop (H -> G) using calc ----
+    \draw[backloop]
+      (H.north) -- ($(H.north)+(0,0.38)$)
+      -- node[above,font=\tiny,text=black]{iterates internally}
+      ($(G.north)+(0,0.38)$) -- (G.north);
   \end{tikzpicture}
   \vspace{0.3em}
   \footnotesize Each box maps to a file in the repo.

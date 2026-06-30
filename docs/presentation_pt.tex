@@ -14,7 +14,7 @@
 \usepackage{grffile}
 \usepackage{xcolor}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta,shapes,positioning}
+\usetikzlibrary{arrows.meta,shapes,positioning,calc}
 
 \usetheme{Berlin}
 \usecolortheme{seahorse}
@@ -639,43 +639,48 @@
 
 \begin{frame}{Pipeline de integra\c{c}\~ao CP-SAT}
   \centering
+  % largura do n\'o 1.75cm + intervalo 0.26cm  =>  5*1.75 + 4*0.26 = 9.79 cm -- cabe no slide
   \begin{tikzpicture}[
-    node distance=0.28cm and 0.42cm,
-    proc/.style={draw, rectangle, rounded corners=2pt,
-                 fill=blue!10, align=center, font=\tiny,
-                 minimum width=2.55cm, minimum height=0.62cm},
-    ionode/.style={draw, rectangle, rounded corners=2pt,
-               fill=green!15, align=center, font=\tiny,
-               minimum width=2.55cm, minimum height=0.62cm},
-    solvenode/.style={draw, rectangle, rounded corners=2pt,
-                 fill=orange!18, align=center, font=\tiny,
-                 minimum width=2.55cm, minimum height=0.62cm},
-    outnode/.style={draw, rectangle, rounded corners=2pt,
-                fill=teal!18, align=center, font=\tiny,
-                minimum width=2.55cm, minimum height=0.62cm},
-    arr/.style={-{Stealth[length=3pt,width=2pt]}, thick},
-    backloop/.style={-{Stealth[length=3pt,width=2pt]}, thick, dashed, red!60!black},
+    node distance=0.22cm and 0.26cm,
+    base/.style={draw, rectangle, rounded corners=3pt,
+                 align=center, font=\tiny,
+                 minimum width=1.75cm, minimum height=0.68cm,
+                 text width=1.65cm},
+    proc/.style={base, fill=blue!12},
+    ionode/.style={base, fill=green!18},
+    solvenode/.style={base, fill=orange!22},
+    outnode/.style={base, fill=teal!20},
+    arr/.style={-{Stealth[length=4pt,width=3pt]}, semithick},
+    backloop/.style={-{Stealth[length=4pt,width=3pt]}, semithick, dashed,
+                     red!65!black},
   ]
-    \node[ionode]  (A) {Dados do hospital\\EHR / PAS};
+    % ---- Linha 1: esquerda para direita ----
+    \node[ionode]  (A) {Dados do hospital\\(EHR / PAS)};
     \node[proc, right=of A] (B) {Construir\\PlanningInstance};
-    \node[proc, right=of B] (C) {Calcular $dd_c$, $w_c$\\prioridade e penaliza\c{c}\~ao};
+    \node[proc, right=of B] (C) {Calcular $dd_c$, $w_c$\\prioridade, penaliz.};
     \node[proc, right=of C] (D) {Pr\'e-filtro C4--C6\\$(c,d,r)$ eleg\'iveis};
-    \node[proc, right=of D] (E) {Criar vari\'aveis\\$\text{pr}$, $\text{start}$, $\text{iv}$,\\$\text{sgiv}$, $u_c$, $\text{bed}_c$};
+    \node[proc, right=of D] (E) {Criar vari\'aveis\\pr, start, iv,\\sgiv, $u_c$, bed};
 
-    \node[proc, below=0.75cm of E] (F) {Adicionar C1--C11\\NoOverlap, Cumulativo,\\limites de soma};
-    \node[proc, left=of F] (G) {Definir objectivo\\4 termos};
-    \node[solvenode, left=of G] (H) {Pesquisa CP-SAT\\port\'ef\'olio paralelo\\desf. $\le1\%$ / tempo};
-    \node[proc, left=of H] (I) {Extrair solu\c{c}\~ao\\agendados + n\~ao agend.};
-    \node[outnode, left=of I] (J) {Verificar C1--C11\\+ output Gantt};
+    % ---- Linha 2: direita para esquerda ----
+    \node[proc,     below=0.85cm of E] (F) {Adicionar C1--C11\\NoOverlap,\\Cumulativo, caps};
+    \node[proc,      left=of F]        (G) {Definir objectivo\\4 termos};
+    \node[solvenode, left=of G]        (H) {Pesquisa CP-SAT\\port. paralelo\\desf. $\le1\%$};
+    \node[proc,      left=of H]        (I) {Extrair\\solu\c{c}\~ao};
+    \node[outnode,   left=of I]        (J) {Verificar C1--C11\\output Gantt};
 
+    % ---- Setas linha 1 ----
     \draw[arr] (A)--(B); \draw[arr] (B)--(C);
     \draw[arr] (C)--(D); \draw[arr] (D)--(E);
+    % ---- Liga\c{c}\~ao entre linhas ----
     \draw[arr] (E)--(F);
+    % ---- Setas linha 2 ----
     \draw[arr] (F)--(G); \draw[arr] (G)--(H);
     \draw[arr] (H)--(I); \draw[arr] (I)--(J);
-    \draw[backloop] (H.north) -- ++(0,0.35) --
-      node[above,font=\tiny,text=black]{continua internamente}
-      ++(-2.6cm,0) -- (G.north);
+    % ---- Ciclo de re-pesquisa (H -> G) usando calc ----
+    \draw[backloop]
+      (H.north) -- ($(H.north)+(0,0.38)$)
+      -- node[above,font=\tiny,text=black]{itera internamente}
+      ($(G.north)+(0,0.38)$) -- (G.north);
   \end{tikzpicture}
   \vspace{0.3em}
   \footnotesize Cada caixa corresponde a um ficheiro no reposit\'orio.
