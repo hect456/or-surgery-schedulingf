@@ -13,6 +13,8 @@
 \usepackage{graphicx}
 \usepackage{grffile}
 \usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,shapes,positioning}
 
 \usetheme{Berlin}
 \usecolortheme{seahorse}
@@ -414,6 +416,57 @@
   \end{block}
 \end{frame}
 
+\begin{frame}{Variáveis CP-SAT -- referência formal completa}
+  \tiny
+  \begin{center}
+  \begin{tabular}{p{3.0cm}p{3.0cm}p{6.0cm}}
+    \toprule
+    \textbf{Variável} & \textbf{Domínio} & \textbf{Significado} \\
+    \midrule
+    $\text{pr}_{cdr}$
+      & $\{0,1\}$
+      & 1 se o caso $c$ é agendado no dia $d$ no bloco $r$; criada apenas
+        para trios $(c,d,r)$ elegíveis (pré-filtro C4--C6) \\[2pt]
+    $\text{start}_{cdr}$
+      & $[0,\,k_{dr}]$
+      & Hora de início (min desde abertura do bloco) quando $\text{pr}_{cdr}=1$ \\[2pt]
+    $\text{end}_{cdr}$
+      & $[0,\,k_{dr}]$
+      & Fim de ocupação do bloco = $\text{start}_{cdr}+t_c^{tot}$ \\[2pt]
+    $\text{iv}_{cdr}$
+      & \texttt{OptionalIntervalVar}
+      & Intervalo de ocupação do \textbf{Bloco}: $[\text{start},\,\text{start}+t_c^{tot})$;
+        activo iff $\text{pr}_{cdr}=1$; usado em C7, C10, C11 \\[2pt]
+    $\text{sgend}_{cdr}$
+      & $[0,\,k_{dr}]$
+      & Fim de envolvimento do cirurgião = $\text{start}_{cdr}+t_c^{op}$ \\[2pt]
+    $\text{sgiv}_{cdr}$
+      & \texttt{OptionalIntervalVar}
+      & Intervalo do \textbf{Cirurgião}: $[\text{start},\,\text{start}+t_c^{op})$;
+        activo iff $\text{pr}_{cdr}=1$; usado apenas em C8.
+        Mais curto que $\text{iv}_{cdr}$ por $t_c^{clean}$ \\[2pt]
+    $u_c$
+      & $\{0,1\}$
+      & 1 se o caso $c$ \emph{não} é agendado (penalização $w_c$);
+        só para $p_c\ne4$. Imposto por $\sum_{d,r}\text{pr}_{cdr}+u_c=1$ \\[2pt]
+    $\text{dayof}_c$
+      & $\{0,\dots,n_{d}-1\}$
+      & Índice do dia em que $c$ é agendado; derivado via
+        \texttt{OnlyEnforceIf} de $\text{pr}_{cdr}=1$.
+        Apenas para casos com $\rho(c)\ne\text{none}$ \\[2pt]
+    $\text{bed}_c$
+      & \texttt{OptionalIntervalVar}
+      & Intervalo de UCI/recuperação: $[\text{dayof}_c,\,\text{dayof}_c+\text{los}_c)$;
+        presente iff $1-u_c=1$; alimenta Cumulativo de C11 \\[2pt]
+    $\text{overflow}_c$
+      & $[0,\,\text{los}_c]$
+      & Dias de estadia além do horizonte:
+        $\max(0,\,\text{dayof}_c+\text{los}_c-n_d)$; acrescenta Termo 4 ao objectivo \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
 \begin{frame}{Função objectivo -- fórmula completa}
   \[\small
     \min \;
@@ -630,6 +683,33 @@
   \miplink
 \end{frame}
 
+\begin{frame}{Quando seria o MILP a escolha mais adequada?}
+  \small Mesmo nesta classe de problemas, uma formulação MILP é mais
+  natural ou prática em situações específicas:
+  \vspace{0.4em}
+  \begin{itemize}
+    \item \textbf{Apenas atribuição de dias, sem horas exactas.} Quando
+      o resultado necessário é ``caso $c$ opera no dia $d$ no bloco $r$''
+      sem hora de início, o MILP por dia-balde captura isso naturalmente;
+      variáveis de intervalo seriam engenharia a mais.
+    \item \textbf{Sem recursos partilhados entre blocos.} Se cada
+      equipamento está dedicado a um bloco e os cirurgiões não mudam
+      de bloco, a restrição de contagem diária é suficiente.
+    \item \textbf{Sem restrição multi-dia (C11 não necessária).} Quando
+      as camas de recuperação/UCI não são modeladas, uma das razões
+      estruturais para intervalos desaparece.
+    \item \textbf{Instância pequena, relaxação LP apertada.} Um solver
+      comercial (Gurobi, CPLEX) fecha o desfasamento em segundos com
+      um certificado de optimalidade provada.
+    \item \textbf{Necessidade de variáveis duais LP.} Os preços-sombra
+      da relaxação LP suportam análise de sensibilidade -- o CP-SAT não
+      os expõe directamente.
+    \item \textbf{Equipa com expertise em MILP.} Quando a equipa domina
+      MILP mais do que CP, o risco de erros de modelação é menor com
+      a ferramenta que conhecem melhor.
+  \end{itemize}
+\end{frame}
+
 % ============================================================
 \section{Resultados}
 
@@ -771,6 +851,52 @@
   \end{itemize}
 \end{frame}
 
+\begin{frame}{Diagrama do pipeline de integração CP-SAT}
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.28cm and 0.42cm,
+    proc/.style={draw, rectangle, rounded corners=2pt,
+                 fill=blue!10, align=center, font=\tiny,
+                 minimum width=2.55cm, minimum height=0.62cm},
+    io/.style={draw, rectangle, rounded corners=2pt,
+               fill=green!15, align=center, font=\tiny,
+               minimum width=2.55cm, minimum height=0.62cm},
+    warn/.style={draw, rectangle, rounded corners=2pt,
+                 fill=orange!18, align=center, font=\tiny,
+                 minimum width=2.55cm, minimum height=0.62cm},
+    out/.style={draw, rectangle, rounded corners=2pt,
+                fill=teal!18, align=center, font=\tiny,
+                minimum width=2.55cm, minimum height=0.62cm},
+    arr/.style={-{Stealth[length=3pt,width=2pt]}, thick},
+    loop/.style={-{Stealth[length=3pt,width=2pt]}, thick, dashed, red!60!black},
+  ]
+    \node[io]   (A) {Dados do hospital\\EHR / PAS};
+    \node[proc, right=of A] (B) {Construir\\PlanningInstance};
+    \node[proc, right=of B] (C) {Calcular $dd_c$, $w_c$\\prioridade e penalidade};
+    \node[proc, right=of C] (D) {Pré-filtro C4--C6\\$(c,d,r)$ elegíveis};
+    \node[proc, right=of D] (E) {Criar variáveis\\$\text{pr}$, $\text{start}$, $\text{iv}$,\\$\text{sgiv}$, $u_c$, $\text{bed}_c$};
+
+    \node[proc, below=0.75cm of E] (F) {Adicionar C1--C11\\NoOverlap, Cumulativo,\\limites de soma};
+    \node[proc, left=of F] (G) {Definir objectivo\\4 termos};
+    \node[warn, left=of G] (H) {Pesquisa CP-SAT\\portfólio paralelo\\desf. $\le1\%$ / tempo};
+    \node[proc, left=of H] (I) {Extrair solução\\agendados + não agend.};
+    \node[out,  left=of I] (J) {Verificar C1--C11\\+ output Gantt};
+
+    \draw[arr] (A)--(B); \draw[arr] (B)--(C);
+    \draw[arr] (C)--(D); \draw[arr] (D)--(E);
+    \draw[arr] (E)--(F);
+    \draw[arr] (F)--(G); \draw[arr] (G)--(H);
+    \draw[arr] (H)--(I); \draw[arr] (I)--(J);
+    \draw[loop] (H.north) -- ++(0,0.35) -- node[above,font=\tiny,black]{continua internamente} ++(-2.6cm,0) -- (G.north);
+  \end{tikzpicture}
+
+  \vspace{0.3em}
+  \footnotesize Cada caixa corresponde a um ficheiro no repositório.
+  O pré-filtro (C4--C6) é executado uma vez na construção -- nunca repetido.
+  O portfólio paralelo no passo de pesquisa usa $\le$\texttt{cpu\_count()} trabalhadores;
+  partilham cláusulas aprendidas entre si.
+\end{frame}
+
 \begin{frame}{Uma biblioteca reutilizável de modelos (Resposta Q\&A 2)}
   \begin{enumerate}\small
     \item \textbf{Tipos de dados base} -- dataclasses tipadas, sem
@@ -835,6 +961,35 @@
   \end{center}
 \end{frame}
 
+\begin{frame}{Conclusões: o que as experiências demonstram}
+  \small
+  \begin{enumerate}
+    \item \textbf{O CP-SAT encontra agendamentos estritamente melhores em
+      ambas as instâncias.} Demo: 155.0 vs. 157.0 (MIP). Instância média:
+      69\,956 vs. 74\,074 (óptimo \emph{provado} do MIP) -- melhoria de
+      5.56\% agendando mais um caso. A razão é sempre a mesma: região
+      viável maior e correcta.
+    \item \textbf{O desfasamento próprio não mede o que parece.} O
+      desfasamento de 6.62\% do CP-SAT e o de 0.56\% do CBC são medidos
+      face a fronteiras de \emph{regiões viáveis diferentes}. A comparação
+      correcta é o valor absoluto do objectivo; o CP-SAT ganha claramente.
+    \item \textbf{A modelação do equipamento partilhado é o factor estrutural
+      decisivo.} \texttt{AddCumulative} verifica sobreposição temporal real;
+      a contagem diária do MIP proíbe dois casos sequenciais do intensificador
+      C no mesmo dia mesmo quando nunca se sobrepõem.
+    \item \textbf{C11 (camas de recuperação/UCI) não pode ser expressa num MIP
+      de dia-balde.} Só este facto é justificação estrutural para CP baseado
+      em intervalos, independentemente do desempenho.
+    \item \textbf{O design de dois intervalos permite práticas reais de bloco
+      operatório.} O cirurgião livre em $t=70$ pode entrar num segundo bloco
+      enquanto o Bloco 1 ainda está a ser limpo até $t=90$.
+    \item \textbf{A instância demo resolve em $\sim$0.1 s com zero desfasamento
+      provado} -- inteiramente prático mesmo para suporte a decisão em tempo real.
+    \item \textbf{Com um orçamento de 2 minutos, o CP-SAT já é mais valioso
+      que o CBC.} Mais casos agendados, objectivo menor, mesmo tempo de execução.
+  \end{enumerate}
+\end{frame}
+
 \begin{frame}{Questões}
   \centering
   \Large Obrigado.
@@ -870,20 +1025,34 @@
   \bk
 \end{frame}
 
-\begin{frame}{MIP -- variáveis e objectivo}
-  \[\small
-    x_{cdr}\in\{0,1\}\;\forall c,\;d\in D_c,\;r
-    \qquad
-    z_c\in[0,1]\;\forall c:\;p_c\ne4
-  \]
-  $z_c$ relaxado para contínuo; C3 força-o a $\{0,1\}$ no óptimo.
-  \[\small
+\begin{frame}{MIP -- variáveis, referência completa}
+  \footnotesize
+  \begin{center}
+  \begin{tabular}{p{2.4cm}p{2.8cm}p{6.5cm}}
+    \toprule
+    \textbf{Variável} & \textbf{Domínio} & \textbf{Significado} \\
+    \midrule
+    $x_{cdr}$ & $\{0,1\}$ &
+      1 se o caso $c$ é agendado no dia $d$ no bloco $r$.
+      Apenas criada para trios elegíveis (mesmo pré-filtro C4--C6 do CP-SAT).
+      Determina o dia e o bloco, mas \emph{não} a hora exacta. \\[3pt]
+    $z_c$ & $[0,1]$ &
+      1 se o caso $c$ \emph{não} é agendado esta semana (só para
+      $p_c\ne4$). Declarada contínua -- C3 força-a a $\{0,1\}$ no óptimo
+      porque o objectivo penaliza não-agendamento fraccionário; declará-la
+      binária não acrescenta nenhum apertamento à relaxação LP. \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.4em}
+  \textbf{Objectivo} (mesma estrutura de três termos que o CP-SAT, sem Termo 4):
+  \[\footnotesize
     \min\;\sum_{c:\,dd_c\ge0}\sum_{d,r}[dd_c+d]\,x_{cdr}
     +\sum_{c:\,dd_c<0}\sum_{d,r}[dd_c+\alpha d]\,x_{cdr}
     +\sum_{c:\,p_c\ne4}w_c\,z_c
   \]
-  Mesma estrutura de três termos que os Termos 1--3 do CP-SAT; o mesmo
-  \texttt{penalty.py} calcula $w_c$. Sem Termo 4.
+  O mesmo \texttt{penalty.py} calcula $w_c$ -- sem implementação separada
+  por solver. Sem Termo 4 porque C11 não é expressável.
   \bk
 \end{frame}
 

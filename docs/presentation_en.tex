@@ -12,6 +12,8 @@
 \usepackage{graphicx}
 \usepackage{grffile}
 \usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,shapes,positioning}
 
 \usetheme{Berlin}
 \usecolortheme{seahorse}
@@ -412,6 +414,58 @@
   \end{block}
 \end{frame}
 
+\begin{frame}{CP-SAT variables -- complete formal reference}
+  \tiny
+  \begin{center}
+  \begin{tabular}{p{3.2cm}p{3cm}p{6.2cm}}
+    \toprule
+    \textbf{Variable} & \textbf{Domain} & \textbf{Meaning} \\
+    \midrule
+    $\text{pr}_{cdr}$
+      & $\{0,1\}$
+      & 1 if case $c$ is scheduled on day $d$ in room $r$; created
+        only for eligible $(c,d,r)$ triples (C4--C6 pre-filter) \\[2pt]
+    $\text{start}_{cdr}$
+      & $[0,\,k_{dr}]$
+      & Start time (min from room opening) when $\text{pr}_{cdr}=1$ \\[2pt]
+    $\text{end}_{cdr}$
+      & $[0,\,k_{dr}]$
+      & Room-block end = $\text{start}_{cdr}+t_c^{tot}$ (room interval boundary) \\[2pt]
+    $\text{iv}_{cdr}$
+      & \texttt{OptionalIntervalVar}
+      & \textbf{Room} occupancy interval: $[\text{start},\,\text{start}+t_c^{tot})$;
+        active iff $\text{pr}_{cdr}=1$; feeds C7, C10, C11 \\[2pt]
+    $\text{sgend}_{cdr}$
+      & $[0,\,k_{dr}]$
+      & Surgeon-end = $\text{start}_{cdr}+t_c^{op}$ (surgeon interval boundary) \\[2pt]
+    $\text{sgiv}_{cdr}$
+      & \texttt{OptionalIntervalVar}
+      & \textbf{Surgeon} time interval: $[\text{start},\,\text{start}+t_c^{op})$;
+        active iff $\text{pr}_{cdr}=1$; feeds C8 only.
+        Shorter than $\text{iv}_{cdr}$ by $t_c^{clean}$ \\[2pt]
+    $u_c$
+      & $\{0,1\}$
+      & 1 if case $c$ is \emph{not} scheduled (penalty $w_c$ applies);
+        only for $p_c\ne4$.
+        Enforced by $\sum_{d,r}\text{pr}_{cdr}+u_c=1$ \\[2pt]
+    $\text{dayof}_c$
+      & $\{0,\dots,n_{d}-1\}$
+      & Index of the day $c$ is scheduled on; derived via
+        \texttt{OnlyEnforceIf} from whichever $\text{pr}_{cdr}=1$.
+        Only built for cases with $\rho(c)\ne\text{none}$ \\[2pt]
+    $\text{bed}_c$
+      & \texttt{OptionalIntervalVar}
+      & ICU/recovery interval: $[\text{dayof}_c,\,\text{dayof}_c+\text{los}_c)$;
+        present iff $1-u_c=1$; feeds C11 Cumulative \\[2pt]
+    $\text{overflow}_c$
+      & $[0,\,\text{los}_c]$
+      & Days of bed stay past the horizon:
+        $\max(0,\,\text{dayof}_c+\text{los}_c-n_d)$; adds Term 4 to objective \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
 \begin{frame}{Objective function -- complete formula}
   \[\small
     \min \;
@@ -632,6 +686,36 @@
   \miplink
 \end{frame}
 
+\begin{frame}{When would MILP be the right choice instead?}
+  \small Even within this problem class, a MILP formulation is the more
+  natural or practical choice in specific situations:
+  \vspace{0.4em}
+  \begin{itemize}
+    \item \textbf{Day-assignment only, no clock times needed.} When the
+      deliverable is ``case $c$ runs on day $d$ in room $r$'' without
+      an exact start time, the day-bucket MIP naturally captures this;
+      interval variables would be over-engineering.
+    \item \textbf{No shared resources across rooms.} If each piece of
+      equipment is dedicated to one room and surgeons don't move between
+      rooms, the day-count constraint is sufficient -- the pathological
+      case that drives the CP-SAT choice doesn't arise.
+    \item \textbf{No multi-day downstream constraint (C11).} When recovery/
+      ICU beds are not modelled, one key structural reason for intervals
+      disappears.
+    \item \textbf{Small instance, LP relaxation is tight.} A commercial
+      solver (Gurobi, CPLEX) can close the MIP gap in seconds with a
+      provably optimal LP-relaxation certificate -- faster convergence
+      than CP-SAT on instances where the feasible region is small.
+    \item \textbf{Need LP dual variables.} Shadow prices from the LP
+      relaxation support sensitivity analysis and what-if reporting --
+      something CP-SAT doesn't expose directly.
+    \item \textbf{Team expertise is in MILP.} When the implementation
+      team is more fluent in LP/MIP modelling than CP, the modelling
+      risk of incorrectly encoding constraints is lower with the tool
+      they know better.
+  \end{itemize}
+\end{frame}
+
 % ============================================================
 \section{Results}
 
@@ -786,6 +870,59 @@
   \end{itemize}
 \end{frame}
 
+\begin{frame}{CP-SAT integration pipeline}
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.28cm and 0.42cm,
+    proc/.style={draw, rectangle, rounded corners=2pt,
+                 fill=blue!10, align=center, font=\tiny,
+                 minimum width=2.55cm, minimum height=0.62cm},
+    io/.style={draw, rectangle, rounded corners=2pt,
+               fill=green!15, align=center, font=\tiny,
+               minimum width=2.55cm, minimum height=0.62cm},
+    warn/.style={draw, rectangle, rounded corners=2pt,
+                 fill=orange!18, align=center, font=\tiny,
+                 minimum width=2.55cm, minimum height=0.62cm},
+    out/.style={draw, rectangle, rounded corners=2pt,
+                fill=teal!18, align=center, font=\tiny,
+                minimum width=2.55cm, minimum height=0.62cm},
+    arr/.style={-{Stealth[length=3pt,width=2pt]}, thick},
+    loop/.style={-{Stealth[length=3pt,width=2pt]}, thick, dashed, red!60!black},
+  ]
+    % --- Row 1: left to right ---
+    \node[io]   (A) {Hospital data\\EHR / PAS};
+    \node[proc, right=of A] (B) {Build\\PlanningInstance};
+    \node[proc, right=of B] (C) {Compute $dd_c$, $w_c$\\priority \& penalty};
+    \node[proc, right=of C] (D) {Pre-filter C4--C6\\eligible $(c,d,r)$ only};
+    \node[proc, right=of D] (E) {Create variables\\$\text{pr}$, $\text{start}$, $\text{iv}$,\\$\text{sgiv}$, $u_c$, $\text{bed}_c$};
+
+    % --- Row 2: right to left ---
+    \node[proc, below=0.75cm of E] (F) {Add C1--C11\\NoOverlap, Cumulative,\\sum caps, overflow};
+    \node[proc, left=of F] (G) {Set 4-term\\objective};
+    \node[warn, left=of G] (H) {CP-SAT solve\\parallel portfolio\\gap $\le1\%$ / time};
+    \node[proc, left=of H] (I) {Extract assignments\\+ unscheduled};
+    \node[out,  left=of I] (J) {Verify C1--C11\\+ output Gantt};
+
+    % Row 1 arrows
+    \draw[arr] (A)--(B); \draw[arr] (B)--(C);
+    \draw[arr] (C)--(D); \draw[arr] (D)--(E);
+    % Bend into row 2
+    \draw[arr] (E)--(F);
+    % Row 2 arrows
+    \draw[arr] (F)--(G); \draw[arr] (G)--(H);
+    \draw[arr] (H)--(I); \draw[arr] (I)--(J);
+    % Re-solve loop (if time limit hit with gap > target, solver stops anyway;
+    % shown here as "gap not yet met" conceptual loop)
+    \draw[loop] (H.north) -- ++(0,0.35) -- node[above,font=\tiny,black]{continues internally} ++(-2.6cm,0) -- (G.north);
+  \end{tikzpicture}
+
+  \vspace{0.3em}
+  \footnotesize Each box maps to a file in the repo.
+  The pre-filter (C4--C6) runs once at build time -- never repeated.
+  The parallel portfolio in the Solve step runs $\le$\texttt{cpu\_count()} workers;
+  each shares learned clauses with the others.
+\end{frame}
+
 \begin{frame}{A reusable library of models (Q\&A answer 2)}
   \begin{enumerate}\small
     \item \textbf{Core data types} -- typed dataclasses, no solver imports;
@@ -848,6 +985,35 @@
   \end{center}
 \end{frame}
 
+\begin{frame}{Conclusions: what the experiments show}
+  \small
+  \begin{enumerate}
+    \item \textbf{CP-SAT finds strictly better schedules on both instances.}
+      Demo: 155.0 vs. 157.0 (MIP). Medium: 69{,}956 vs. 74{,}074 (MIP's
+      \emph{proven} optimum) -- a 5.56\% improvement while scheduling one
+      more case. The reason is always the same: a larger, correct feasible
+      region.
+    \item \textbf{The gap metric does not mean what it seems.}
+      CP-SAT's 6.62\% gap and CBC's 0.56\% gap are measured against
+      \emph{different} feasible-region bounds. The right comparison is the
+      absolute objective value; CP-SAT wins by a wide margin.
+    \item \textbf{Shared equipment modeling is the decisive structural factor.}
+      \texttt{AddCumulative} checks actual time overlap; the MIP's day-count
+      cap forbids two sequential C-arm cases on the same day even when they
+      never overlap -- a logically incorrect constraint.
+    \item \textbf{C11 (recovery/ICU beds) cannot be expressed in a day-bucket
+      MIP.} This alone is a structural justification for interval-based CP,
+      independent of performance.
+    \item \textbf{The two-interval design enables real OR practice.} A surgeon
+      free at $t=70$ can enter a second room while Room 1 cleans until $t=90$.
+      A naive single-interval model incorrectly forbids this.
+    \item \textbf{The demo instance solves in $\sim$0.1 s to proven zero-gap
+      optimality} -- entirely practical even in interactive decision support.
+    \item \textbf{At a 2-minute budget, CP-SAT is already more valuable than
+      CBC.} More cases scheduled, lower objective, same wall-clock time.
+  \end{enumerate}
+\end{frame}
+
 \begin{frame}{Questions}
   \centering
   \Large Thank you.
@@ -885,21 +1051,35 @@
   \bk
 \end{frame}
 
-\begin{frame}{MIP -- variables and objective}
-  \[\small
-    x_{cdr}\in\{0,1\}\;\forall c,\;d\in D_c,\;r
-    \qquad
-    z_c\in[0,1]\;\forall c:\;p_c\ne4
-  \]
-  $z_c$ is relaxed to continuous; C3 forces it to $\{0,1\}$ at the
-  optimum (nothing else benefits from declaring it binary).
-  \[\small
+\begin{frame}{MIP -- variables, complete reference}
+  \footnotesize
+  \begin{center}
+  \begin{tabular}{p{2.6cm}p{2.8cm}p{6.4cm}}
+    \toprule
+    \textbf{Variable} & \textbf{Domain} & \textbf{Meaning} \\
+    \midrule
+    $x_{cdr}$ & $\{0,1\}$ &
+      1 if case $c$ is scheduled on day $d$ in room $r$.
+      Only created for eligible $(c,d,r)$ triples (same C4--C6 pre-filter
+      as CP-SAT). Determines day and room but \emph{not} exact time. \\[3pt]
+    $z_c$ & $[0,1]$ &
+      1 if case $c$ is \emph{not} scheduled this week (non-priority-4 only).
+      Declared continuous -- C3 forces it to $\{0,1\}$ at the optimum
+      because the objective penalises fractional non-scheduling; declaring
+      it binary adds no useful LP-relaxation tightening. \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.4em}
+  \textbf{Objective} (same three-term structure as CP-SAT, no Term 4):
+  \[\footnotesize
     \min\;\sum_{c:\,dd_c\ge0}\sum_{d,r}[dd_c+d]\,x_{cdr}
     +\sum_{c:\,dd_c<0}\sum_{d,r}[dd_c+\alpha d]\,x_{cdr}
     +\sum_{c:\,p_c\ne4}w_c\,z_c
   \]
-  Same three-term structure as CP-SAT Terms 1--3; the same \texttt{penalty.py}
-  function computes $w_c$. No Term 4 (no C11).
+  Same \texttt{penalty.py} computes $w_c$ -- no separate implementation
+  per solver. No Term 4 because C11 (recovery beds) is not expressible
+  in this formulation.
   \bk
 \end{frame}
 
