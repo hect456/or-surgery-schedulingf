@@ -883,11 +883,11 @@
     warn/.style={draw, rectangle, rounded corners=2pt,
                  fill=orange!18, align=center, font=\tiny,
                  minimum width=2.55cm, minimum height=0.62cm},
-    out/.style={draw, rectangle, rounded corners=2pt,
+    outnode/.style={draw, rectangle, rounded corners=2pt,
                 fill=teal!18, align=center, font=\tiny,
                 minimum width=2.55cm, minimum height=0.62cm},
     arr/.style={-{Stealth[length=3pt,width=2pt]}, thick},
-    loop/.style={-{Stealth[length=3pt,width=2pt]}, thick, dashed, red!60!black},
+    backloop/.style={-{Stealth[length=3pt,width=2pt]}, thick, dashed, red!60!black},
   ]
     % --- Row 1: left to right ---
     \node[io]   (A) {Hospital data\\EHR / PAS};
@@ -901,7 +901,7 @@
     \node[proc, left=of F] (G) {Set 4-term\\objective};
     \node[warn, left=of G] (H) {CP-SAT solve\\parallel portfolio\\gap $\le1\%$ / time};
     \node[proc, left=of H] (I) {Extract assignments\\+ unscheduled};
-    \node[out,  left=of I] (J) {Verify C1--C11\\+ output Gantt};
+    \node[outnode, left=of I] (J) {Verify C1--C11\\+ output Gantt};
 
     % Row 1 arrows
     \draw[arr] (A)--(B); \draw[arr] (B)--(C);
@@ -913,7 +913,7 @@
     \draw[arr] (H)--(I); \draw[arr] (I)--(J);
     % Re-solve loop (if time limit hit with gap > target, solver stops anyway;
     % shown here as "gap not yet met" conceptual loop)
-    \draw[loop] (H.north) -- ++(0,0.35) -- node[above,font=\tiny,black]{continues internally} ++(-2.6cm,0) -- (G.north);
+    \draw[backloop] (H.north) -- ++(0,0.35) -- node[above,font=\tiny,text=black]{continues internally} ++(-2.6cm,0) -- (G.north);
   \end{tikzpicture}
 
   \vspace{0.3em}
